@@ -24,12 +24,15 @@ import {
   MAX_GLASS_OPACITY,
   MAX_INTERFACE_FONT_SIZE,
   MAX_PROMPT_FONT_SIZE,
+  MAX_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS,
   MAX_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MAX_TERMINAL_FONT_SIZE,
   MIN_CODE_FONT_SIZE,
   MIN_GLASS_OPACITY,
   MIN_INTERFACE_FONT_SIZE,
   MIN_PROMPT_FONT_SIZE,
+  DEFAULT_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS,
+  MIN_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS,
   MIN_SIDEBAR_AUTO_SETTLE_AFTER_DAYS,
   MIN_TERMINAL_FONT_SIZE,
 } from "@t3tools/contracts/settings";
@@ -1562,6 +1565,44 @@ function AutoSettleDaysInput({
   );
 }
 
+function AutoDeleteSettledDaysInput({
+  value,
+  onCommit,
+}: {
+  value: number;
+  onCommit: (days: number) => void;
+}) {
+  // Same draft/commit contract as AutoSettleDaysInput: the field can be
+  // emptied mid-edit, and only a valid whole number in range is persisted.
+  const [draft, setDraft] = useState(String(value));
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  return (
+    <Input
+      type="number"
+      min={MIN_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS}
+      max={MAX_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS}
+      className="w-full sm:w-24"
+      value={draft}
+      onChange={(event) => {
+        setDraft(event.target.value);
+        const parsed = Number(event.target.value);
+        if (
+          Number.isInteger(parsed) &&
+          parsed >= MIN_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS &&
+          parsed <= MAX_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS
+        ) {
+          onCommit(parsed);
+        }
+      }}
+      onBlur={() => setDraft(String(value))}
+      aria-label="Days settled before delete"
+    />
+  );
+}
+
 // The legacy rows sit behind the fold, so a settings-search jump has to
 // expand the section before its target can mount and scroll.
 const LEGACY_FEATURE_TARGET_IDS: ReadonlySet<string> = new Set([
@@ -1609,7 +1650,7 @@ function LegacyFeaturesSection() {
           <div className="relative space-y-1 overflow-visible pt-3 text-foreground">
             <SettingsRow
               {...searchableSetting("legacy-plan-mode")}
-              description="Brings back the Build/Plan toggle in the composer along with the /plan and /default commands and the Shift+Tab shortcut. While off, every thread runs in build mode."
+              description="Brings back the Build/Plan toggle in the composer along with the /plan and /default commands. While off, every thread runs in build mode."
               control={
                 <Switch
                   checked={settings.planModeEnabled}
@@ -1794,6 +1835,36 @@ export function GeneralSettingsPanel() {
               <AutoSettleDaysInput
                 value={settings.sidebarAutoSettleAfterDays}
                 onCommit={(days) => updateSettings({ sidebarAutoSettleAfterDays: days })}
+              />
+            }
+          />
+        ) : null}
+
+        <SettingsRow
+          {...searchableSetting("auto-delete-settled-threads")}
+          description="Permanently deletes threads that stay settled this long. Deleted threads cannot be restored. Pinned, snoozed, archived, and busy threads are never deleted."
+          control={
+            <Switch
+              checked={settings.autoDeleteSettledThreadsAfterDays !== null}
+              onCheckedChange={(checked) =>
+                updateSettings({
+                  autoDeleteSettledThreadsAfterDays: checked
+                    ? DEFAULT_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS
+                    : null,
+                })
+              }
+              aria-label="Auto-delete settled threads"
+            />
+          }
+        />
+        {settings.autoDeleteSettledThreadsAfterDays !== null ? (
+          <SettingsRow
+            title="Days settled before delete"
+            description="Any new activity un-settles a thread and restarts this timer."
+            control={
+              <AutoDeleteSettledDaysInput
+                value={settings.autoDeleteSettledThreadsAfterDays}
+                onCommit={(days) => updateSettings({ autoDeleteSettledThreadsAfterDays: days })}
               />
             }
           />

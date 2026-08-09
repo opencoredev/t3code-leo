@@ -127,6 +127,14 @@
       "types": "./src/state/subagentRuntime.ts",
       "default": "./src/state/subagentRuntime.ts"
     },
+    "./state/pi-workflow-inspector": {
+      "types": "./src/state/piWorkflowInspector.ts",
+      "default": "./src/state/piWorkflowInspector.ts"
+    },
+    "./state/workflow-inspector": {
+      "types": "./src/state/workflowInspector.ts",
+      "default": "./src/state/workflowInspector.ts"
+    },
     "./state/thread-sort": {
       "types": "./src/state/threadSort.ts",
       "default": "./src/state/threadSort.ts"

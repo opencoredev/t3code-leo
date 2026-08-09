@@ -419,6 +419,30 @@ export const GrokSettings = makeProviderSettingsSchema(
 );
 export type GrokSettings = typeof GrokSettings.Type;
 
+export const PiSettings = makeProviderSettingsSchema(
+  {
+    enabled: Schema.Boolean.pipe(
+      Schema.withDecodingDefault(Effect.succeed(true)),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+    binaryPath: makeBinaryPathSetting("pi-acp").pipe(
+      Schema.annotateKey({
+        title: "Binary path",
+        description: "Path to the external @automatalabs/pi-acp executable.",
+        providerSettingsForm: { placeholder: "pi-acp", clearWhenEmpty: "omit" },
+      }),
+    ),
+    customModels: Schema.Array(Schema.String).pipe(
+      Schema.withDecodingDefault(Effect.succeed([])),
+      Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
+    ),
+  },
+  {
+    order: ["binaryPath"],
+  },
+);
+export type PiSettings = typeof PiSettings.Type;
+
 export const OpenCodeSettings = makeProviderSettingsSchema(
   {
     enabled: Schema.Boolean.pipe(
@@ -535,6 +559,20 @@ export const BackgroundActivitySettings = Schema.Struct({
 }).pipe(Schema.withDecodingDefault(Effect.succeed({})));
 export type BackgroundActivitySettings = typeof BackgroundActivitySettings.Type;
 
+// Server-owned retention for settled threads. Null means never delete; the
+// bounds keep an accidental keystroke from meaning "delete everything" (min)
+// or an unreachable horizon (max).
+export const MIN_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS = 1;
+export const MAX_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS = 365;
+export const AutoDeleteSettledThreadsAfterDays = Schema.Int.check(
+  Schema.isBetween({
+    minimum: MIN_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS,
+    maximum: MAX_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS,
+  }),
+);
+export type AutoDeleteSettledThreadsAfterDays = typeof AutoDeleteSettledThreadsAfterDays.Type;
+export const DEFAULT_AUTO_DELETE_SETTLED_THREADS_AFTER_DAYS: AutoDeleteSettledThreadsAfterDays = 30;
+
 export const ServerSettings = Schema.Struct({
   // Legacy token-by-token assistant output. Deliberately a fresh key (was
   // `enableAssistantStreaming`): decoding drops the old key, so everyone,
@@ -543,6 +581,12 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed(false)),
   ),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
+  // Days a thread may stay settled before the server deletes it. Null (the
+  // default) keeps every settled thread forever: retention is opt-in because
+  // deletion is destructive and unrecoverable.
+  autoDeleteSettledThreadsAfterDays: Schema.NullOr(AutoDeleteSettledThreadsAfterDays).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
   backgroundActivity: BackgroundActivitySettings,
   // Legacy flat fields retained for old settings files and old clients. New
   // consumers should resolve `backgroundActivity` instead.
@@ -599,6 +643,7 @@ export const ServerSettings = Schema.Struct({
     cursor: CursorSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     grok: GrokSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
     opencode: OpenCodeSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+    piAgent: PiSettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   }).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
   // New driver-agnostic instance map. Keyed by `ProviderInstanceId`; values
   // are `ProviderInstanceConfig` envelopes. The driver-specific config blob
@@ -609,6 +654,14 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed({})),
   ),
   observability: ObservabilitySettings.pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  // User-arranged order for the sidebar's active rows, keyed by
+  // `<environmentId>:<projectId>` so one project's drags never move another
+  // project's rows. Values are scoped thread keys; stale keys are ignored on
+  // read and pruned on the next write, so rows that leave the active section
+  // (pin, snooze, settle, archive) drop out on their own.
+  sidebarActiveThreadOrder: Schema.Record(Schema.String, Schema.Array(Schema.String)).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -702,10 +755,19 @@ const OpenCodeSettingsPatch = Schema.Struct({
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 
+const PiSettingsPatch = Schema.Struct({
+  enabled: Schema.optionalKey(Schema.Boolean),
+  binaryPath: Schema.optionalKey(TrimmedString),
+  customModels: Schema.optionalKey(Schema.Array(Schema.String)),
+});
+
 export const ServerSettingsPatch = Schema.Struct({
   // Server settings
   enableLegacyTokenStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
+  autoDeleteSettledThreadsAfterDays: Schema.optionalKey(
+    Schema.NullOr(AutoDeleteSettledThreadsAfterDays),
+  ),
   backgroundActivity: Schema.optionalKey(
     Schema.Struct({
       schemaVersion: Schema.optionalKey(Schema.Literal(1)),
@@ -742,6 +804,7 @@ export const ServerSettingsPatch = Schema.Struct({
       cursor: Schema.optionalKey(CursorSettingsPatch),
       grok: Schema.optionalKey(GrokSettingsPatch),
       opencode: Schema.optionalKey(OpenCodeSettingsPatch),
+      piAgent: Schema.optionalKey(PiSettingsPatch),
     }),
   ),
   // Whole-map replacement for the new instance config. Patching individual
@@ -749,6 +812,11 @@ export const ServerSettingsPatch = Schema.Struct({
   // patches risk leaving driver-specific config in a half-merged state.
   // The web UI sends a fully-formed map every time it edits this field.
   providerInstances: Schema.optionalKey(Schema.Record(ProviderInstanceId, ProviderInstanceConfig)),
+  // Whole-map replacement, same reasoning as `providerInstances`: the map is
+  // small and a per-project patch would race drags across clients.
+  sidebarActiveThreadOrder: Schema.optionalKey(
+    Schema.Record(Schema.String, Schema.Array(Schema.String)),
+  ),
 });
 export type ServerSettingsPatch = typeof ServerSettingsPatch.Type;
 

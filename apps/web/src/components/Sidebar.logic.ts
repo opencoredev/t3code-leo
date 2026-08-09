@@ -274,6 +274,68 @@ export function isTrailingDoubleClick(detail: number): boolean {
   return detail > 1;
 }
 
+/**
+ * Compacts one project's explicit active-thread order against the rows that
+ * are actually active right now: ids that left the active section drop out,
+ * and rows the order has never seen append in their incoming (chronological)
+ * order. Used both to render and to compute the value persisted after a drop.
+ */
+export function planActiveThreadOrder(input: {
+  explicitOrder: readonly string[];
+  activeIds: readonly string[];
+}): readonly string[] {
+  const activeIds = new Set(input.activeIds);
+  const kept: string[] = [];
+  const keptIds = new Set<string>();
+  for (const id of input.explicitOrder) {
+    if (!activeIds.has(id) || keptIds.has(id)) continue;
+    kept.push(id);
+    keptIds.add(id);
+  }
+  return [...kept, ...input.activeIds.filter((id) => !keptIds.has(id))];
+}
+
+/**
+ * Applies the per-project explicit orders to the active list. Each project's
+ * rows are permuted within the slots they already occupy, so arranging one
+ * project never moves another project's rows out of chronological order.
+ */
+export function orderActiveThreadsByProject<TItem>(input: {
+  items: readonly TItem[];
+  getId: (item: TItem) => string;
+  getProjectKey: (item: TItem) => string;
+  orderByProjectKey: ReadonlyMap<string, readonly string[]>;
+}): TItem[] {
+  const { getId, getProjectKey, items, orderByProjectKey } = input;
+  if (orderByProjectKey.size === 0) return [...items];
+
+  const slotsByProjectKey = new Map<string, number[]>();
+  for (const [index, item] of items.entries()) {
+    const projectKey = getProjectKey(item);
+    const slots = slotsByProjectKey.get(projectKey);
+    if (slots) {
+      slots.push(index);
+    } else {
+      slotsByProjectKey.set(projectKey, [index]);
+    }
+  }
+
+  const ordered = [...items];
+  for (const [projectKey, slots] of slotsByProjectKey) {
+    const explicitOrder = orderByProjectKey.get(projectKey);
+    if (explicitOrder === undefined || explicitOrder.length === 0) continue;
+    const itemById = new Map(slots.map((slot) => [getId(items[slot]!), items[slot]!]));
+    const plannedIds = planActiveThreadOrder({
+      explicitOrder,
+      activeIds: slots.map((slot) => getId(items[slot]!)),
+    });
+    for (const [position, slot] of slots.entries()) {
+      ordered[slot] = itemById.get(plannedIds[position]!)!;
+    }
+  }
+  return ordered;
+}
+
 export function orderItemsByPreferredIds<TItem, TId>(input: {
   items: readonly TItem[];
   preferredIds: readonly TId[];

@@ -2,8 +2,10 @@ import { describe, expect, it } from "@effect/vitest";
 
 import {
   initialCodexScanState,
+  initialPiScanState,
   parseClaudeLine,
   parseCodexLine,
+  parsePiLine,
   totalTokens,
 } from "./usageTranscripts.ts";
 
@@ -133,6 +135,67 @@ describe("parseCodexLine", () => {
     expect(parseCodexLine(tokenCount(100, 0, 10, 0), state)).toBeNull();
     parseCodexLine(turnContext, state);
     expect(parseCodexLine(tokenCount(100, 0, 10, 0), state)).not.toBeNull();
+  });
+});
+
+describe("parsePiLine", () => {
+  it("extracts native Pi usage, cost, and session identity", () => {
+    const state = initialPiScanState();
+    parsePiLine(
+      JSON.stringify({
+        type: "session",
+        id: "pi-session-1",
+        timestamp: "2026-08-09T00:09:23.363Z",
+      }),
+      state,
+    );
+    const record = parsePiLine(
+      JSON.stringify({
+        type: "message",
+        id: "pi-message-1",
+        timestamp: "2026-08-09T00:10:17.590Z",
+        message: {
+          role: "assistant",
+          provider: "openai-codex",
+          model: "gpt-5.6-sol",
+          usage: {
+            input: 457,
+            output: 60,
+            cacheRead: 24_064,
+            cacheWrite: 12,
+            reasoning: 14,
+            totalTokens: 24_593,
+            cost: { total: 0.016_117 },
+          },
+        },
+      }),
+      state,
+    );
+
+    expect(record).toMatchObject({
+      provider: "pi",
+      model: "gpt-5.6-sol",
+      sessionId: "pi-session-1",
+      reportedCostUsd: 0.016_117,
+      dedupeKey: "pi-message-1",
+      totals: {
+        uncachedInputTokens: 457,
+        cachedInputTokens: 24_064,
+        cacheCreationTokens: 12,
+        outputTokens: 60,
+        reasoningTokens: 14,
+      },
+    });
+  });
+
+  it("ignores non-assistant and zero-usage records", () => {
+    const state = initialPiScanState();
+    expect(
+      parsePiLine(
+        JSON.stringify({ type: "message", timestamp: "2026-08-09T00:00:00Z", message: {} }),
+        state,
+      ),
+    ).toBeNull();
   });
 });
 

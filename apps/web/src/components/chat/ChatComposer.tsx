@@ -95,6 +95,7 @@ import { ComposerPlanFollowUpBanner } from "./ComposerPlanFollowUpBanner";
 import { ComposerControl, ComposerControlIcon, ComposerSelectControl } from "./ComposerControl";
 import { resolveComposerMenuActiveItemId } from "./composerMenuHighlight";
 import { searchSlashCommandItems } from "./composerSlashCommandSearch";
+import { resolveNextFavoriteModel } from "./favoriteModelCycle";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
@@ -910,6 +911,46 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ? selectedModelForPicker
       : (normalizeModelSlug(selectedModelForPicker, selectedProvider) ?? selectedModelForPicker);
   }, [modelOptionsByInstance, selectedInstanceId, selectedModelForPicker, selectedProvider]);
+  const cycleFavoriteModel = useCallback((): boolean => {
+    const next = resolveNextFavoriteModel({
+      favorites: settings.favorites ?? [],
+      current: { provider: selectedInstanceId, model: selectedModel },
+      isEligible: (favorite) => {
+        const entry = providerInstanceEntries.find(
+          (candidate) => candidate.instanceId === favorite.provider,
+        );
+        if (!entry?.enabled || !entry.isAvailable) return false;
+        if (lockedProvider && entry.driverKind !== lockedProvider) return false;
+        if (
+          lockedContinuationGroupKey &&
+          entry.continuationGroupKey !== lockedContinuationGroupKey
+        ) {
+          return false;
+        }
+        if (
+          !(modelOptionsByInstance.get(favorite.provider) ?? []).some(
+            (option) => option.slug === favorite.model,
+          )
+        ) {
+          return false;
+        }
+        return getModelDisabledReason(favorite.provider, favorite.model) === null;
+      },
+    });
+    if (!next) return false;
+    onProviderModelSelect(next.provider, next.model);
+    return true;
+  }, [
+    getModelDisabledReason,
+    lockedContinuationGroupKey,
+    lockedProvider,
+    modelOptionsByInstance,
+    onProviderModelSelect,
+    providerInstanceEntries,
+    selectedInstanceId,
+    selectedModel,
+    settings.favorites,
+  ]);
 
   // ------------------------------------------------------------------
   // Context window
@@ -1869,6 +1910,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     event: KeyboardEvent,
   ) => {
     if (key === "Tab" && event.shiftKey) {
+      if (cycleFavoriteModel()) return true;
       if (!planModeUiEnabled) return false;
       toggleInteractionMode();
       return true;

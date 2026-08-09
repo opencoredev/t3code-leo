@@ -714,6 +714,13 @@ export function createServerEnvironmentAtoms<R, E>(
       tag: WS_METHODS.serverGetUsageSummary,
       staleTimeMs: 60_000,
     }),
+    // A settled child journal never changes, so cached transcripts stay warm
+    // while the user flips between agents.
+    piSubagentTranscript: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:server:pi-subagent-transcript",
+      tag: WS_METHODS.serverGetPiSubagentTranscript,
+      staleTimeMs: 30_000,
+    }),
     configProjection,
     welcome: createEnvironmentRpcSubscriptionAtomFamily(runtime, {
       label: "environment-data:server:welcome",

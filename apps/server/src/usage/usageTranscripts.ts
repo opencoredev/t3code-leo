@@ -68,7 +68,9 @@ export function totalTokens(totals: UsageTokenTotals): number {
  * an order of magnitude.
  */
 export function mightCarryUsage(line: string, provider: UsageProviderKind): boolean {
-  return provider === "claude" ? line.includes('"usage"') : line.includes('"token_count"');
+  if (provider === "claude") return line.includes('"usage"');
+  if (provider === "pi") return line.includes('"usage"');
+  return line.includes('"token_count"');
 }
 
 /* -------------------------------------------------------------------------- */
@@ -240,6 +242,75 @@ export function parseCodexLine(line: string, state: CodexScanState): UsageRecord
     reportedCostUsd: null,
     // Rollout files are unique per session, so events need no global dedup.
     dedupeKey: null,
+  };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Pi                                                                         */
+/* -------------------------------------------------------------------------- */
+
+export interface PiScanState {
+  sessionId: string;
+}
+
+export function initialPiScanState(): PiScanState {
+  return { sessionId: "" };
+}
+
+/** Parses one native Pi session journal line. */
+export function parsePiLine(line: string, state: PiScanState): UsageRecord | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+
+  const record = parsed as Record<string, unknown>;
+  if (record["type"] === "session") {
+    if (typeof record["id"] === "string") state.sessionId = record["id"];
+    return null;
+  }
+  if (record["type"] !== "message") return null;
+
+  const message = record["message"];
+  if (typeof message !== "object" || message === null) return null;
+  const messageRecord = message as Record<string, unknown>;
+  if (messageRecord["role"] !== "assistant") return null;
+
+  const usage = messageRecord["usage"];
+  if (typeof usage !== "object" || usage === null) return null;
+  const usageRecord = usage as Record<string, unknown>;
+  const timestampMs = parseTimestampMs(record["timestamp"]);
+  if (timestampMs === null) return null;
+
+  const model = typeof messageRecord["model"] === "string" ? messageRecord["model"] : "";
+  if (model.length === 0) return null;
+
+  const totals: UsageTokenTotals = {
+    // Pi reports uncached input separately from cache reads and writes.
+    uncachedInputTokens: int(usageRecord["input"]),
+    cachedInputTokens: int(usageRecord["cacheRead"]),
+    cacheCreationTokens: int(usageRecord["cacheWrite"]),
+    outputTokens: int(usageRecord["output"]),
+    reasoningTokens: Math.min(int(usageRecord["output"]), int(usageRecord["reasoning"])),
+  };
+  if (totalTokens(totals) === 0) return null;
+
+  const cost = usageRecord["cost"];
+  const reportedCost =
+    typeof cost === "object" && cost !== null ? (cost as Record<string, unknown>)["total"] : null;
+
+  return {
+    provider: "pi",
+    timestampMs,
+    model,
+    sessionId: state.sessionId,
+    totals,
+    reportedCostUsd:
+      typeof reportedCost === "number" && Number.isFinite(reportedCost) ? reportedCost : null,
+    dedupeKey: typeof record["id"] === "string" ? record["id"] : null,
   };
 }
 

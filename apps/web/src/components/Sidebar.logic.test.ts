@@ -13,7 +13,9 @@ import {
   hasUnseenCompletion,
   isContextMenuPointerDown,
   isTrailingDoubleClick,
+  orderActiveThreadsByProject,
   orderItemsByPreferredIds,
+  planActiveThreadOrder,
   resolveProjectStatusIndicator,
   resolveSidebarStageBadgeLabel,
   resolveThreadRowClassName,
@@ -1615,5 +1617,45 @@ describe("sortLogicalProjectsForSidebar", () => {
         (project) => project.projectKey,
       ),
     ).toEqual(["logical-newer", "logical-older"]);
+  });
+});
+
+describe("active thread manual order", () => {
+  const rows = [
+    { id: "env:a1", projectKey: "env:alpha" },
+    { id: "env:b1", projectKey: "env:beta" },
+    { id: "env:a2", projectKey: "env:alpha" },
+    { id: "env:a3", projectKey: "env:alpha" },
+  ];
+
+  it("prunes ids that left the active section and appends unseen rows", () => {
+    expect(
+      planActiveThreadOrder({
+        explicitOrder: ["env:a3", "env:gone", "env:a1"],
+        activeIds: ["env:a1", "env:a2", "env:a3"],
+      }),
+    ).toEqual(["env:a3", "env:a1", "env:a2"]);
+  });
+
+  it("permutes only the arranged project's slots", () => {
+    expect(
+      orderActiveThreadsByProject({
+        items: rows,
+        getId: (row) => row.id,
+        getProjectKey: (row) => row.projectKey,
+        orderByProjectKey: new Map([["env:alpha", ["env:a3", "env:a1"]]]),
+      }).map((row) => row.id),
+    ).toEqual(["env:a3", "env:b1", "env:a1", "env:a2"]);
+  });
+
+  it("leaves rows untouched without an explicit order", () => {
+    expect(
+      orderActiveThreadsByProject({
+        items: rows,
+        getId: (row) => row.id,
+        getProjectKey: (row) => row.projectKey,
+        orderByProjectKey: new Map(),
+      }),
+    ).toEqual(rows);
   });
 });

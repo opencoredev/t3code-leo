@@ -1,6 +1,6 @@
 import type { ContextMenuItem, PreviewSessionSnapshot } from "@t3tools/contracts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
-import { Bot, FileDiff, Files, Globe2, Plus, TerminalSquare, X } from "lucide-react";
+import { Bot, FileDiff, Files, Globe2, Plus, TerminalSquare, Workflow, X } from "lucide-react";
 import {
   type MouseEvent as ReactMouseEvent,
   type ReactElement,
@@ -45,9 +45,16 @@ interface RightPanelTabsProps {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
+  onAddWorkflows: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  /**
+   * The active thread runs a provider with a workflow inspector AND has
+   * workflow activity to inspect. Provider-scoped, so the entry disappears
+   * on threads where it would only ever be empty.
+   */
+  workflowsAvailable: boolean;
   /** Running + waiting subagents; badges the Agents card in the empty state. */
   liveAgentCount: number;
   children: ReactNode;
@@ -95,9 +102,11 @@ function RightPanelEmptyState(props: {
   onAddDiff: () => void;
   onAddFiles: () => void;
   onAddAgents: () => void;
+  onAddWorkflows: () => void;
   browserAvailable: boolean;
   diffAvailable: boolean;
   filesAvailable: boolean;
+  workflowsAvailable: boolean;
   liveAgentCount: number;
 }) {
   const actions = [
@@ -146,6 +155,19 @@ function RightPanelEmptyState(props: {
       onClick: props.onAddAgents,
       badgeCount: props.liveAgentCount,
     },
+    ...(props.workflowsAvailable
+      ? ([
+          {
+            label: "Workflows",
+            description: "Inspect phases and child agents.",
+            icon: Workflow,
+            available: true,
+            disabledReason: null,
+            onClick: props.onAddWorkflows,
+            badgeCount: 0,
+          },
+        ] as const)
+      : []),
   ] as const;
 
   return (
@@ -233,6 +255,8 @@ function surfaceTitle(
       );
     case "agents":
       return "Agents";
+    case "workflows":
+      return "Workflows";
     case "preview": {
       const snapshot = surface.resourceId ? sessions[surface.resourceId] : null;
       if (!snapshot || snapshot.navStatus._tag === "Idle") return "Browser";
@@ -294,6 +318,8 @@ function SurfaceIcon({
       return <TerminalSquare className="size-3 shrink-0" />;
     case "agents":
       return <Bot className="size-3 shrink-0" />;
+    case "workflows":
+      return <Workflow className="size-3 shrink-0" />;
   }
 }
 
@@ -498,6 +524,12 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
                     <Bot />
                     Agents
                   </SurfaceMenuItem>
+                  {props.workflowsAvailable ? (
+                    <SurfaceMenuItem available onClick={props.onAddWorkflows}>
+                      <Workflow />
+                      Workflows
+                    </SurfaceMenuItem>
+                  ) : null}
                 </MenuPopup>
               </Menu>
             ) : null}
@@ -513,9 +545,11 @@ export function RightPanelTabs(props: RightPanelTabsProps) {
             onAddDiff={props.onAddDiff}
             onAddFiles={props.onAddFiles}
             onAddAgents={props.onAddAgents}
+            onAddWorkflows={props.onAddWorkflows}
             browserAvailable={props.browserAvailable}
             diffAvailable={props.diffAvailable}
             filesAvailable={props.filesAvailable}
+            workflowsAvailable={props.workflowsAvailable}
             liveAgentCount={props.liveAgentCount}
           />
         ) : (

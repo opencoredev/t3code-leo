@@ -2,6 +2,7 @@ import { autoAnimate } from "@formkit/auto-animate";
 import { useAtomValue } from "@effect/atom-react";
 import {
   DndContext,
+  KeyboardSensor,
   PointerSensor,
   closestCenter,
   useSensor,
@@ -11,6 +12,7 @@ import {
 import {
   SortableContext,
   arrayMove,
+  sortableKeyboardCoordinates,
   useSortable,
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
@@ -105,7 +107,12 @@ import { useThreadActions } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { openCommandPalette } from "../commandPaletteBus";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
-import { useClientSettings, useUpdateClientSettings } from "../hooks/useSettings";
+import {
+  useClientSettings,
+  usePrimarySettings,
+  useUpdateClientSettings,
+  useUpdatePrimarySettings,
+} from "../hooks/useSettings";
 import { useCopyToClipboard } from "../hooks/useCopyToClipboard";
 import { useNowMinute } from "../hooks/useNowMinute";
 import { useEnvironments, usePrimaryEnvironmentId } from "../state/environments";
@@ -131,7 +138,9 @@ import {
   firstValidTimestampMs,
   hasUnseenCompletion,
   isTrailingDoubleClick,
+  orderActiveThreadsByProject,
   orderItemsByPreferredIds,
+  planActiveThreadOrder,
   planPinnedReorder,
   resolveAdjacentThreadId,
   resolveSettledTimestamp,
@@ -408,24 +417,23 @@ function SnoozePopoverButton(props: {
   );
 }
 
-// Subset of useSortable applied to a pinned card's root <li>. Listeners go
+// Subset of useSortable applied to a draggable card's root <li>. Listeners go
 // on the whole card (no dedicated handle): the pointer sensor's distance
-// constraint keeps plain clicks working, and we skip dnd-kit's aria
-// attributes since there is no keyboard sensor and the card body already
-// carries its own button semantics.
+// constraint keeps plain clicks working. dnd-kit's aria attributes come along
+// so the keyboard sensor can announce and drive the drag from the row itself.
 type SortablePinnedRowBag = Pick<
   ReturnType<typeof useSortable>,
-  "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
+  "attributes" | "listeners" | "setNodeRef" | "transform" | "transition" | "isDragging"
 >;
 
 function SortablePinnedThreadRow(props: {
   id: string;
   children: (bag: SortablePinnedRowBag) => ReactNode;
 }) {
-  const { listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: props.id,
   });
-  return props.children({ listeners, setNodeRef, transform, transition, isDragging });
+  return props.children({ attributes, listeners, setNodeRef, transform, transition, isDragging });
 }
 
 const SidebarThreadRow = memo(function SidebarThreadRow(props: {
@@ -1029,6 +1037,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: {
             }
           : undefined
       }
+      {...(sortable?.attributes ?? {})}
       {...(sortable?.listeners ?? {})}
       className={cn(
         "list-none py-0.5 [content-visibility:auto] [contain-intrinsic-size:auto_96px]",
@@ -1854,13 +1863,72 @@ export default function Sidebar() {
     threads,
   ]);
 
+  // Manual order for the active section, one compact list per project in the
+  // server's settings so it survives reload and converges across clients.
+  // Reads ignore ids the order has never seen or that left the active section
+  // (planActiveThreadOrder); a drop rewrites the touched project's list only.
+  const activeThreadOrderSetting = usePrimarySettings(
+    (settings) => settings.sidebarActiveThreadOrder,
+  );
+  const updatePrimarySettings = useUpdatePrimarySettings();
+  const orderedActiveThreads = useMemo(
+    () =>
+      orderActiveThreadsByProject({
+        items: activeThreads,
+        getId: (thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+        getProjectKey: (thread) => `${thread.environmentId}:${thread.projectId}`,
+        orderByProjectKey: new Map(Object.entries(activeThreadOrderSetting)),
+      }),
+    [activeThreadOrderSetting, activeThreads],
+  );
+  const activeDndSensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const handleActiveDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      const activeKey = String(event.active.id);
+      const overKey = event.over === null ? null : String(event.over.id);
+      if (overKey === null || activeKey === overKey) return;
+      const projectKeyByThreadKey = new Map(
+        orderedActiveThreads.map(
+          (thread) =>
+            [
+              scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+              `${thread.environmentId}:${thread.projectId}`,
+            ] as const,
+        ),
+      );
+      const projectKey = projectKeyByThreadKey.get(activeKey);
+      // Rows only move inside their own project: each project owns one list,
+      // and its rows keep the slots that project already holds in the list.
+      if (projectKey === undefined || projectKeyByThreadKey.get(overKey) !== projectKey) return;
+      const keys = orderedActiveThreads
+        .map((thread) => scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)))
+        .filter((threadKey) => projectKeyByThreadKey.get(threadKey) === projectKey);
+      const fromIndex = keys.indexOf(activeKey);
+      const toIndex = keys.indexOf(overKey);
+      if (fromIndex === -1 || toIndex === -1) return;
+      updatePrimarySettings({
+        sidebarActiveThreadOrder: {
+          ...activeThreadOrderSetting,
+          [projectKey]: planActiveThreadOrder({
+            explicitOrder: arrayMove(keys, fromIndex, toIndex),
+            activeIds: keys,
+          }),
+        },
+      });
+    },
+    [activeThreadOrderSetting, orderedActiveThreads, updatePrimarySettings],
+  );
+
   const threadSearchInputRef = useRef<HTMLInputElement>(null);
   const [threadSearchQuery, setThreadSearchQuery] = useState("");
   const [activeSearchResultIndex, setActiveSearchResultIndex] = useState(0);
   const isSearchingThreads = threadSearchQuery.trim().length > 0;
   const searchableThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...snoozedThreads, ...settledThreads],
-    [activeThreads, pinnedThreads, settledThreads, snoozedThreads],
+    () => [...pinnedThreads, ...orderedActiveThreads, ...snoozedThreads, ...settledThreads],
+    [orderedActiveThreads, pinnedThreads, settledThreads, snoozedThreads],
   );
   const threadSearchResults = useMemo(
     () => searchSidebarThreadsByTitle(searchableThreads, threadSearchQuery),
@@ -1964,8 +2032,13 @@ export default function Sidebar() {
   }, [routeThreadKey, snoozedShelfExpanded, snoozedThreads]);
 
   const orderedThreads = useMemo(
-    () => [...pinnedThreads, ...activeThreads, ...visibleSnoozedThreads, ...renderedSettledThreads],
-    [pinnedThreads, activeThreads, visibleSnoozedThreads, renderedSettledThreads],
+    () => [
+      ...pinnedThreads,
+      ...orderedActiveThreads,
+      ...visibleSnoozedThreads,
+      ...renderedSettledThreads,
+    ],
+    [pinnedThreads, orderedActiveThreads, visibleSnoozedThreads, renderedSettledThreads],
   );
   const orderedThreadKeys = useMemo(
     () =>
@@ -3400,9 +3473,36 @@ export default function Sidebar() {
                       />,
                     );
                   }
-                  for (const thread of activeThreads) {
-                    items.push(renderThreadRow(thread, "active"));
-                  }
+                  // Active rows drag inside their own project (see
+                  // handleActiveDragEnd); the keyboard sensor makes the same
+                  // move reachable without a pointer.
+                  items.push(
+                    <DndContext
+                      key="active-dnd"
+                      sensors={activeDndSensors}
+                      collisionDetection={closestCenter}
+                      modifiers={[restrictToVerticalAxis, restrictToFirstScrollableAncestor]}
+                      onDragEnd={handleActiveDragEnd}
+                    >
+                      <SortableContext
+                        items={orderedActiveThreads.map((thread) =>
+                          scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id)),
+                        )}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        {orderedActiveThreads.map((thread) => {
+                          const threadKey = scopedThreadKey(
+                            scopeThreadRef(thread.environmentId, thread.id),
+                          );
+                          return (
+                            <SortablePinnedThreadRow key={threadKey} id={threadKey}>
+                              {(bag) => renderThreadRow(thread, "active", bag)}
+                            </SortablePinnedThreadRow>
+                          );
+                        })}
+                      </SortableContext>
+                    </DndContext>,
+                  );
                   // Snoozed shelf: between the inbox and Settled — out of the
                   // way, never gone. The header always renders while anything
                   // is snoozed (the count is the whole footprint when

@@ -36,3 +36,7 @@ node_modules/
 *.log
 .env*
 !.env.example
+
+# Agent working directories (fork-local)
+.pi/
+.pi-subagents/

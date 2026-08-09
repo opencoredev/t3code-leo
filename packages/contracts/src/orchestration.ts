@@ -1000,6 +1000,22 @@ const ThreadTitleRegenerationCompleteCommand = Schema.Struct({
   title: Schema.optional(TrimmedNonEmptyString),
 });
 
+/**
+ * Server-issued retention delete for a settled thread. Never dispatchable by
+ * a client: the retention scan reads a projection row, then hands the decider
+ * the exact `settledAt` it saw plus the one cutoff computed for that scan.
+ * The decider re-checks both against the authoritative read model, so a
+ * thread that woke, re-settled, pinned, or picked up work between scan and
+ * dispatch survives instead of being deleted on stale evidence.
+ */
+const ThreadAutoDeleteSettledCommand = Schema.Struct({
+  type: Schema.Literal("thread.auto-delete-settled"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  settledAt: IsoDateTime,
+  cutoff: IsoDateTime,
+});
+
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
   ThreadMessageAssistantDeltaCommand,
@@ -1009,6 +1025,7 @@ const InternalOrchestrationCommand = Schema.Union([
   ThreadActivityAppendCommand,
   ThreadRevertCompleteCommand,
   ThreadTitleRegenerationCompleteCommand,
+  ThreadAutoDeleteSettledCommand,
 ]);
 export type InternalOrchestrationCommand = typeof InternalOrchestrationCommand.Type;
 

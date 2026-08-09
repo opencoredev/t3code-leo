@@ -370,3 +370,61 @@ export function applyClaudePromptEffortPrefix(
   }
   return `Ultrathink:\n${trimmed}`;
 }
+
+/**
+ * Provider option ids that a user can pin a per-model default for from
+ * Settings. Kept narrow on purpose: these are the "which flavor of this
+ * model" knobs, not per-turn toggles.
+ */
+export const CONFIGURABLE_MODEL_DEFAULT_OPTION_IDS: ReadonlyArray<string> = [
+  "reasoningEffort",
+  "effort",
+  "reasoning",
+  "variant",
+  "contextWindow",
+];
+
+/**
+ * Applies a configured per-model default onto a fresh model selection.
+ *
+ * Deliberately conservative — the default is used only when every condition
+ * holds, so an existing thread, an explicit draft option, or a stale settings
+ * entry can never be overwritten:
+ *   - the selection carries no explicit options,
+ *   - the configured instance is the exact instance being selected,
+ *   - the configured slug matches the selected model slug exactly,
+ *   - each stored value is still advertised by the live descriptors.
+ */
+export function applyProviderModelOptionDefaults(input: {
+  selection: ModelSelection;
+  instanceId: ProviderInstanceId;
+  modelOptionDefaults: Readonly<Record<string, ReadonlyArray<ProviderOptionSelection>>> | undefined;
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined;
+}): ModelSelection {
+  const { selection, instanceId, modelOptionDefaults, descriptors } = input;
+  if (selection.options !== undefined && selection.options.length > 0) return selection;
+  if (selection.instanceId !== instanceId) return selection;
+  const configured = modelOptionDefaults?.[selection.model];
+  if (!configured || configured.length === 0) return selection;
+  const applicable = configured.filter((entry) => isAdvertisedOptionSelection(descriptors, entry));
+  if (applicable.length === 0) return selection;
+  return { ...selection, options: applicable.map(cloneSelection) };
+}
+
+/**
+ * True when the stored selection still matches an advertised descriptor:
+ * a select descriptor that lists the value as a choice, or a boolean
+ * descriptor with a boolean value.
+ */
+export function isAdvertisedOptionSelection(
+  descriptors: ReadonlyArray<ProviderOptionDescriptor> | null | undefined,
+  selection: ProviderOptionSelection,
+): boolean {
+  const descriptor = descriptors?.find((candidate) => candidate.id === selection.id);
+  if (!descriptor) return false;
+  if (descriptor.type === "boolean") return typeof selection.value === "boolean";
+  return (
+    typeof selection.value === "string" &&
+    descriptor.options.some((option) => option.id === selection.value)
+  );
+}

@@ -6,6 +6,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   DEFAULT_SERVER_SETTINGS,
+  PiSettings,
   ServerSettings,
   ServerSettingsPatch,
 } from "./settings.ts";
@@ -15,6 +16,7 @@ const decodeClientSettingsPatch = Schema.decodeUnknownSync(ClientSettingsPatch);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
+const decodePiSettings = Schema.decodeUnknownSync(PiSettings);
 
 describe("ClientSettings word wrap", () => {
   it("defaults word wrap on", () => {
@@ -100,6 +102,19 @@ describe("ClientSettings sidebar", () => {
   it.each([-1, 0, 91])("rejects an auto-settle threshold outside 1..90: %s", (value) => {
     expect(() => decodeClientSettings({ sidebarAutoSettleAfterDays: value })).toThrow();
     expect(() => decodeClientSettingsPatch({ sidebarAutoSettleAfterDays: value })).toThrow();
+  });
+});
+
+describe("PiSettings", () => {
+  it("defaults to the external pi-acp executable and trims an explicit path", () => {
+    expect(decodePiSettings({})).toEqual({
+      enabled: true,
+      binaryPath: "pi-acp",
+      customModels: [],
+    });
+    expect(decodePiSettings({ binaryPath: "  /opt/pi/bin/pi-acp  " }).binaryPath).toBe(
+      "/opt/pi/bin/pi-acp",
+    );
   });
 });
 
@@ -295,5 +310,33 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
     expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+  });
+});
+
+describe("ServerSettings settled-thread retention", () => {
+  it("keeps settled threads forever by default", () => {
+    expect(decodeServerSettings({}).autoDeleteSettledThreadsAfterDays).toBe(null);
+    expect(DEFAULT_SERVER_SETTINGS.autoDeleteSettledThreadsAfterDays).toBe(null);
+  });
+
+  it("accepts a bounded whole number of days", () => {
+    expect(
+      decodeServerSettings({ autoDeleteSettledThreadsAfterDays: 30 })
+        .autoDeleteSettledThreadsAfterDays,
+    ).toBe(30);
+    expect(
+      decodeServerSettingsPatch({ autoDeleteSettledThreadsAfterDays: 1 })
+        .autoDeleteSettledThreadsAfterDays,
+    ).toBe(1);
+    expect(
+      decodeServerSettingsPatch({ autoDeleteSettledThreadsAfterDays: null })
+        .autoDeleteSettledThreadsAfterDays,
+    ).toBe(null);
+  });
+
+  it("rejects out-of-range and fractional retention windows", () => {
+    expect(() => decodeServerSettings({ autoDeleteSettledThreadsAfterDays: 0 })).toThrow();
+    expect(() => decodeServerSettings({ autoDeleteSettledThreadsAfterDays: 366 })).toThrow();
+    expect(() => decodeServerSettings({ autoDeleteSettledThreadsAfterDays: 1.5 })).toThrow();
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vite-plus/test";
 import { ProviderDriverKind, ProviderInstanceId, type ModelCapabilities } from "@t3tools/contracts";
 
 import {
+  applyProviderModelOptionDefaults,
   buildProviderOptionSelectionsFromDescriptors,
   createModelCapabilities,
   createModelSelection,
@@ -153,5 +154,77 @@ describe("model slug normalization", () => {
 
     expect(normalizeModelSlug("opus", claude)).toBe("claude-opus-5");
     expect(normalizeCustomModelSlug(" opus ")).toBe("opus");
+  });
+});
+
+describe("applyProviderModelOptionDefaults", () => {
+  const instanceId = ProviderInstanceId.make("codex");
+  const descriptors = codexCaps.optionDescriptors ?? [];
+  const defaults = { "gpt-5.4": [{ id: "reasoningEffort", value: "xhigh" as const }] };
+
+  it("applies a configured default to an options-free selection", () => {
+    const next = applyProviderModelOptionDefaults({
+      selection: { instanceId, model: "gpt-5.4" },
+      instanceId,
+      modelOptionDefaults: defaults,
+      descriptors,
+    });
+
+    expect(next.options).toEqual([{ id: "reasoningEffort", value: "xhigh" }]);
+  });
+
+  it("keeps explicit options and never overwrites them", () => {
+    const selection = createModelSelection(instanceId, "gpt-5.4", [
+      { id: "reasoningEffort", value: "low" },
+    ]);
+
+    expect(
+      applyProviderModelOptionDefaults({
+        selection,
+        instanceId,
+        modelOptionDefaults: defaults,
+        descriptors,
+      }),
+    ).toBe(selection);
+  });
+
+  it("ignores a default stored for a different model or instance", () => {
+    expect(
+      applyProviderModelOptionDefaults({
+        selection: { instanceId, model: "gpt-5.3-codex" },
+        instanceId,
+        modelOptionDefaults: defaults,
+        descriptors,
+      }).options,
+    ).toBeUndefined();
+
+    expect(
+      applyProviderModelOptionDefaults({
+        selection: { instanceId: ProviderInstanceId.make("codex_work"), model: "gpt-5.4" },
+        instanceId,
+        modelOptionDefaults: defaults,
+        descriptors,
+      }).options,
+    ).toBeUndefined();
+  });
+
+  it("drops a stored value the live descriptors no longer advertise", () => {
+    expect(
+      applyProviderModelOptionDefaults({
+        selection: { instanceId, model: "gpt-5.4" },
+        instanceId,
+        modelOptionDefaults: { "gpt-5.4": [{ id: "reasoningEffort", value: "galaxy" }] },
+        descriptors,
+      }).options,
+    ).toBeUndefined();
+
+    expect(
+      applyProviderModelOptionDefaults({
+        selection: { instanceId, model: "gpt-5.4" },
+        instanceId,
+        modelOptionDefaults: defaults,
+        descriptors: [],
+      }).options,
+    ).toBeUndefined();
   });
 });

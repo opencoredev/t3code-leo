@@ -11,3 +11,14 @@ other connected devices.
 If reordering is unavailable for one environment, update the T3 Code server running in that
 environment. Older servers can still pin and unpin threads, but do not understand synced ordering;
 their pinned threads keep the default newest-first order below the ones you have arranged.
+
+On web and desktop, drag an active thread to reorder it within its project. The server stores the
+order, so other web and desktop clients connected to that environment use the same order. Pinned,
+snoozed, and settled threads keep their separate sections and ordering rules.
+
+## Delete old settled threads
+
+Automatic deletion is off by default. In **Settings → General**, you can enable permanent deletion
+for threads that remain explicitly settled for a selected number of days. T3 Code skips pinned,
+snoozed, archived, or active threads. It also checks for running work and pending requests before it
+deletes a thread.

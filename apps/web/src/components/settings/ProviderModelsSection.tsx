@@ -14,16 +14,40 @@ import { useMemo, useRef, useState } from "react";
 import {
   ProviderDriverKind,
   type ProviderInstanceId,
+  type ProviderModelOptionDefaults,
+  type ProviderOptionSelection,
+  type SelectProviderOptionDescriptor,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { normalizeCustomModelSlug } from "@t3tools/shared/model";
+import {
+  CONFIGURABLE_MODEL_DEFAULT_OPTION_IDS,
+  normalizeCustomModelSlug,
+} from "@t3tools/shared/model";
 
 import { cn } from "../../lib/utils";
 import { sortModelsForProviderInstance } from "../../modelOrdering";
 import { MAX_CUSTOM_MODEL_LENGTH } from "../../modelSelection";
 import { Button } from "../ui/button";
 import { Input } from "../ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../ui/select";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
+
+/** Sentinel option meaning "no pinned default" for a model's option row. */
+const NO_DEFAULT_VALUE = "__none__";
+
+/**
+ * Select descriptors a per-model default can be pinned for, in advertised
+ * order. Only descriptors the live probe reports are offered, so a default
+ * can never be set for an option the provider does not support.
+ */
+function configurableSelectDescriptors(
+  model: ServerProviderModel,
+): ReadonlyArray<SelectProviderOptionDescriptor> {
+  return (model.capabilities?.optionDescriptors ?? []).filter(
+    (descriptor): descriptor is SelectProviderOptionDescriptor =>
+      descriptor.type === "select" && CONFIGURABLE_MODEL_DEFAULT_OPTION_IDS.includes(descriptor.id),
+  );
+}
 
 /**
  * Placeholder text for the "add a custom model" input, keyed by driver
@@ -62,6 +86,9 @@ interface ProviderModelsSectionProps {
   readonly favoriteModels: ReadonlyArray<string>;
   /** Explicit user-authored model ordering for this provider instance. */
   readonly modelOrder: ReadonlyArray<string>;
+  /** Per-model pinned option defaults for this instance, keyed by model slug. */
+  readonly modelOptionDefaults: ProviderModelOptionDefaults | undefined;
+  readonly onModelOptionDefaultsChange: (next: ProviderModelOptionDefaults) => void;
   /**
    * Commit the new custom-model list. Caller is responsible for routing the
    * write to the correct storage (legacy `settings.providers[kind]` vs.
@@ -92,6 +119,8 @@ export function ProviderModelsSection({
   hiddenModels,
   favoriteModels,
   modelOrder,
+  modelOptionDefaults,
+  onModelOptionDefaultsChange,
   onChange,
   onHiddenModelsChange,
   onFavoriteModelsChange,
@@ -172,6 +201,24 @@ export function ProviderModelsSection({
     onFavoriteModelsChange([...favoriteModels, slug]);
   };
 
+  /**
+   * Write one option default for one model, preserving every other model's
+   * entry. Removing the last pinned option for a model drops its key so the
+   * settings blob does not accumulate empty records.
+   */
+  const handleOptionDefaultChange = (slug: string, optionId: string, value: string | null) => {
+    const current = modelOptionDefaults?.[slug] ?? [];
+    const withoutOption = current.filter((entry) => entry.id !== optionId);
+    const nextForModel: ReadonlyArray<ProviderOptionSelection> =
+      value === null ? withoutOption : [...withoutOption, { id: optionId, value }];
+    const { [slug]: _omit, ...rest } = modelOptionDefaults ?? {};
+    onModelOptionDefaultsChange(
+      nextForModel.length > 0
+        ? ({ ...rest, [slug]: nextForModel } as ProviderModelOptionDefaults)
+        : (rest as ProviderModelOptionDefaults),
+    );
+  };
+
   const handleMove = (slug: string, direction: -1 | 1) => {
     const slugs = orderedModels.map((model) => model.slug);
     const index = slugs.indexOf(slug);
@@ -223,143 +270,87 @@ export function ProviderModelsSection({
           }
           const hasDetails = capLabels.length > 0 || model.name !== model.slug;
 
+          const defaultDescriptors = configurableSelectDescriptors(model);
+          const pinnedDefaults = modelOptionDefaults?.[model.slug] ?? [];
+
           return (
-            <div
-              key={`${instanceId}:${model.slug}`}
-              className={cn(
-                "grid min-h-7 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-1",
-                isHidden && "text-muted-foreground",
-              )}
-            >
-              <div className="flex min-w-0 items-center gap-1">
-                <span
-                  className={cn(
-                    "min-w-0 truncate text-xs",
-                    isHidden ? "text-muted-foreground line-through" : "text-foreground/90",
-                  )}
-                >
-                  {model.name}
-                </span>
-                {hasDetails ? (
+            <div key={`${instanceId}:${model.slug}`}>
+              <div
+                className={cn(
+                  "grid min-h-7 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 py-1",
+                  isHidden && "text-muted-foreground",
+                )}
+              >
+                <div className="flex min-w-0 items-center gap-1">
+                  <span
+                    className={cn(
+                      "min-w-0 truncate text-xs",
+                      isHidden ? "text-muted-foreground line-through" : "text-foreground/90",
+                    )}
+                  >
+                    {model.name}
+                  </span>
+                  {hasDetails ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            className="size-5 rounded-sm p-0 text-muted-foreground/60 hover:text-muted-foreground"
+                            aria-label={`Details for ${model.name}`}
+                          />
+                        }
+                      >
+                        <InfoIcon className="size-3" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="top" className="max-w-56">
+                        <div className="space-y-1">
+                          <code className="block text-[11px] text-foreground">{model.slug}</code>
+                          {capLabels.length > 0 ? (
+                            <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+                              {capLabels.map((label) => (
+                                <span key={label} className="text-[10px] text-muted-foreground">
+                                  {label}
+                                </span>
+                              ))}
+                            </div>
+                          ) : null}
+                        </div>
+                      </TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                  {isHidden ? (
+                    <span className="text-[10px] text-muted-foreground">hidden</span>
+                  ) : null}
+                  {model.isCustom ? (
+                    <span className="text-[10px] text-muted-foreground">custom</span>
+                  ) : null}
+                </div>
+                <div className="flex shrink-0 items-center gap-0.5">
                   <Tooltip>
                     <TooltipTrigger
                       render={
                         <Button
                           size="icon-xs"
                           variant="ghost"
-                          className="size-5 rounded-sm p-0 text-muted-foreground/60 hover:text-muted-foreground"
-                          aria-label={`Details for ${model.name}`}
+                          className={cn(
+                            "size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground",
+                            isFavorite && "text-yellow-500 hover:text-yellow-600",
+                          )}
+                          onClick={() => handleToggleFavorite(model.slug)}
+                          aria-label={`${isFavorite ? "Remove" : "Add"} ${model.name} ${
+                            isFavorite ? "from" : "to"
+                          } favorites`}
                         />
                       }
                     >
-                      <InfoIcon className="size-3" />
-                    </TooltipTrigger>
-                    <TooltipPopup side="top" className="max-w-56">
-                      <div className="space-y-1">
-                        <code className="block text-[11px] text-foreground">{model.slug}</code>
-                        {capLabels.length > 0 ? (
-                          <div className="flex flex-wrap gap-x-2 gap-y-0.5">
-                            {capLabels.map((label) => (
-                              <span key={label} className="text-[10px] text-muted-foreground">
-                                {label}
-                              </span>
-                            ))}
-                          </div>
-                        ) : null}
-                      </div>
-                    </TooltipPopup>
-                  </Tooltip>
-                ) : null}
-                {isHidden ? (
-                  <span className="text-[10px] text-muted-foreground">hidden</span>
-                ) : null}
-                {model.isCustom ? (
-                  <span className="text-[10px] text-muted-foreground">custom</span>
-                ) : null}
-              </div>
-              <div className="flex shrink-0 items-center gap-0.5">
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className={cn(
-                          "size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground",
-                          isFavorite && "text-yellow-500 hover:text-yellow-600",
-                        )}
-                        onClick={() => handleToggleFavorite(model.slug)}
-                        aria-label={`${isFavorite ? "Remove" : "Add"} ${model.name} ${
-                          isFavorite ? "from" : "to"
-                        } favorites`}
-                      />
-                    }
-                  >
-                    <StarIcon className={cn("size-3", isFavorite && "fill-current")} />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">
-                    {isFavorite ? "Remove from favorites" : "Add to favorites"}
-                  </TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                        disabled={!canMoveUp}
-                        onClick={() => handleMove(model.slug, -1)}
-                        aria-label={`Move ${model.name} up`}
-                      />
-                    }
-                  >
-                    <ArrowUpIcon className="size-3" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">Move up</TooltipPopup>
-                </Tooltip>
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        size="icon-xs"
-                        variant="ghost"
-                        className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                        disabled={!canMoveDown}
-                        onClick={() => handleMove(model.slug, 1)}
-                        aria-label={`Move ${model.name} down`}
-                      />
-                    }
-                  >
-                    <ArrowDownIcon className="size-3" />
-                  </TooltipTrigger>
-                  <TooltipPopup side="top">Move down</TooltipPopup>
-                </Tooltip>
-                {!model.isCustom ? (
-                  <Tooltip>
-                    <TooltipTrigger
-                      render={
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                          onClick={() => handleToggleHidden(model.slug)}
-                          aria-label={`${isHidden ? "Show" : "Hide"} ${model.name}`}
-                        />
-                      }
-                    >
-                      {isHidden ? (
-                        <EyeIcon className="size-3" />
-                      ) : (
-                        <EyeOffIcon className="size-3" />
-                      )}
+                      <StarIcon className={cn("size-3", isFavorite && "fill-current")} />
                     </TooltipTrigger>
                     <TooltipPopup side="top">
-                      {isHidden ? "Show in picker" : "Hide from picker"}
+                      {isFavorite ? "Remove from favorites" : "Add to favorites"}
                     </TooltipPopup>
                   </Tooltip>
-                ) : null}
-                {model.isCustom ? (
                   <Tooltip>
                     <TooltipTrigger
                       render={
@@ -367,17 +358,125 @@ export function ProviderModelsSection({
                           size="icon-xs"
                           variant="ghost"
                           className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
-                          aria-label={`Remove ${model.slug}`}
-                          onClick={() => handleRemove(model.slug)}
+                          disabled={!canMoveUp}
+                          onClick={() => handleMove(model.slug, -1)}
+                          aria-label={`Move ${model.name} up`}
                         />
                       }
                     >
-                      <XIcon className="size-3" />
+                      <ArrowUpIcon className="size-3" />
                     </TooltipTrigger>
-                    <TooltipPopup side="top">Remove custom model</TooltipPopup>
+                    <TooltipPopup side="top">Move up</TooltipPopup>
                   </Tooltip>
-                ) : null}
+                  <Tooltip>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                          disabled={!canMoveDown}
+                          onClick={() => handleMove(model.slug, 1)}
+                          aria-label={`Move ${model.name} down`}
+                        />
+                      }
+                    >
+                      <ArrowDownIcon className="size-3" />
+                    </TooltipTrigger>
+                    <TooltipPopup side="top">Move down</TooltipPopup>
+                  </Tooltip>
+                  {!model.isCustom ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                            onClick={() => handleToggleHidden(model.slug)}
+                            aria-label={`${isHidden ? "Show" : "Hide"} ${model.name}`}
+                          />
+                        }
+                      >
+                        {isHidden ? (
+                          <EyeIcon className="size-3" />
+                        ) : (
+                          <EyeOffIcon className="size-3" />
+                        )}
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">
+                        {isHidden ? "Show in picker" : "Hide from picker"}
+                      </TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                  {model.isCustom ? (
+                    <Tooltip>
+                      <TooltipTrigger
+                        render={
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            className="size-5 rounded-sm p-0 text-muted-foreground hover:text-foreground"
+                            aria-label={`Remove ${model.slug}`}
+                            onClick={() => handleRemove(model.slug)}
+                          />
+                        }
+                      >
+                        <XIcon className="size-3" />
+                      </TooltipTrigger>
+                      <TooltipPopup side="top">Remove custom model</TooltipPopup>
+                    </Tooltip>
+                  ) : null}
+                </div>
               </div>
+              {defaultDescriptors.length > 0 ? (
+                <div className="flex flex-wrap items-center gap-1.5 pb-1 pl-1">
+                  {defaultDescriptors.map((descriptor) => {
+                    const pinned = pinnedDefaults.find((entry) => entry.id === descriptor.id);
+                    const pinnedValue =
+                      typeof pinned?.value === "string" &&
+                      descriptor.options.some((option) => option.id === pinned.value)
+                        ? pinned.value
+                        : null;
+                    return (
+                      <Select
+                        key={descriptor.id}
+                        value={pinnedValue ?? NO_DEFAULT_VALUE}
+                        onValueChange={(value) => {
+                          if (typeof value !== "string") return;
+                          handleOptionDefaultChange(
+                            model.slug,
+                            descriptor.id,
+                            value === NO_DEFAULT_VALUE ? null : value,
+                          );
+                        }}
+                      >
+                        <SelectTrigger
+                          className="h-6 w-auto min-w-28 px-2 text-[11px]"
+                          aria-label={`Default ${descriptor.label} for ${model.name}`}
+                        >
+                          <SelectValue>
+                            {`${descriptor.label}: ${
+                              descriptor.options.find((option) => option.id === pinnedValue)
+                                ?.label ?? "default"
+                            }`}
+                          </SelectValue>
+                        </SelectTrigger>
+                        <SelectPopup align="start" alignItemWithTrigger={false}>
+                          <SelectItem hideIndicator value={NO_DEFAULT_VALUE}>
+                            Provider default
+                          </SelectItem>
+                          {descriptor.options.map((option) => (
+                            <SelectItem hideIndicator key={option.id} value={option.id}>
+                              {option.label}
+                            </SelectItem>
+                          ))}
+                        </SelectPopup>
+                      </Select>
+                    );
+                  })}
+                </div>
+              ) : null}
             </div>
           );
         })}

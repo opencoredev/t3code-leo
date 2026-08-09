@@ -39,6 +39,7 @@ import {
 } from "@t3tools/client-runtime/environment";
 import {
   applyClaudePromptEffortPrefix,
+  applyProviderModelOptionDefaults,
   createModelSelection,
   resolvePromptInjectedEffort,
 } from "@t3tools/shared/model";
@@ -149,6 +150,10 @@ import {
   deriveAgentPanelModel,
   foldSubagentActivities,
 } from "@t3tools/client-runtime/state/subagentRuntime";
+import { deriveWorkflowInspectorModel } from "@t3tools/client-runtime/state/workflow-inspector";
+import { WorkflowInspectorPanel } from "./WorkflowInspectorPanel";
+import { WorkflowSubagentThread } from "./chat/WorkflowSubagentThread";
+import { useWorkflowAgentFocusStore } from "../workflowAgentFocusStore";
 import { DiffWorkerPoolProvider } from "./DiffWorkerPoolProvider";
 import { BranchToolbar } from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
@@ -2149,6 +2154,33 @@ function ChatViewContent(props: ChatViewProps) {
       }),
     [agentSessionLive, threadActivities],
   );
+  // Provider-scoped workflow inspector. The derive returns the empty model
+  // for any driver without a registered source, so the surface appears only
+  // where it has something real to show.
+  const workflowInspectorModel = useMemo(
+    () =>
+      deriveWorkflowInspectorModel({
+        activities: threadActivities,
+        driver: selectedProvider,
+        sessionLive: agentSessionLive,
+      }),
+    [agentSessionLive, selectedProvider, threadActivities],
+  );
+  const autoOpenedWorkflowThreadsRef = useRef(new Set<string>());
+  useEffect(() => {
+    if (!workflowInspectorModel.hasActivity || activeThreadRef === null) return;
+    const key = `${activeThreadRef.environmentId}:${activeThreadRef.threadId}`;
+    if (autoOpenedWorkflowThreadsRef.current.has(key)) return;
+    autoOpenedWorkflowThreadsRef.current.add(key);
+    useRightPanelStore.getState().open(activeThreadRef, "workflows");
+  }, [activeThreadRef, workflowInspectorModel.hasActivity]);
+  // A subagent takeover belongs to one thread; navigating away dismisses it.
+  useEffect(() => {
+    const focus = useWorkflowAgentFocusStore.getState().focus;
+    if (focus !== null && focus.threadKey !== activeThreadKey) {
+      useWorkflowAgentFocusStore.getState().close();
+    }
+  }, [activeThreadKey]);
   const pendingApprovals = useMemo(
     () => derivePendingApprovals(threadActivities),
     [threadActivities],
@@ -3218,6 +3250,10 @@ function ChatViewContent(props: ChatViewProps) {
   const addAgentsSurface = useCallback(() => {
     if (!activeThreadRef) return;
     useRightPanelStore.getState().open(activeThreadRef, "agents");
+  }, [activeThreadRef]);
+  const addWorkflowsSurface = useCallback(() => {
+    if (!activeThreadRef) return;
+    useRightPanelStore.getState().open(activeThreadRef, "workflows");
   }, [activeThreadRef]);
   const openFileSurface = useCallback(
     (relativePath: string) => {
@@ -5790,10 +5826,16 @@ function ChatViewContent(props: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
-      const nextModelSelection: ModelSelection = {
+      // A fresh pick from the model picker carries no options, so any
+      // per-model default configured in Settings applies here. Selections that
+      // already carry explicit options are left untouched by the helper.
+      const nextModelSelection: ModelSelection = applyProviderModelOptionDefaults({
+        selection: { instanceId, model: resolvedModel },
         instanceId,
-        model: resolvedModel,
-      };
+        modelOptionDefaults: settings.providerInstances?.[instanceId]?.modelOptionDefaults,
+        descriptors: entry?.models?.find((entryModel) => entryModel.slug === resolvedModel)
+          ?.capabilities?.optionDescriptors,
+      });
       const modelChangeBlockReason = getStartedThreadModelChangeBlockReason({
         providers: providerStatuses,
         hasStartedSession: activeThread.session !== null,
@@ -5987,6 +6029,12 @@ function ChatViewContent(props: ChatViewProps) {
         environmentId={activeThreadRef?.environmentId ?? null}
         threadId={activeThreadRef?.threadId ?? null}
       />
+    ) : activeRightPanelSurface?.kind === "workflows" ? (
+      <WorkflowInspectorPanel
+        model={workflowInspectorModel}
+        activeThreadKey={activeThreadKey}
+        disconnected={phase === "disconnected"}
+      />
     ) : (activeRightPanelSurface?.kind === "files" || activeRightPanelSurface?.kind === "file") &&
       activeProject &&
       activeWorkspaceRoot ? (
@@ -6121,6 +6169,14 @@ function ChatViewContent(props: ChatViewProps) {
                 hideEmptyPlaceholder={isDraftHeroState || threadDetailLoading}
                 topFadeEnabled={!hasTimelineTopBanner}
                 loadEarlier={loadEarlierTurns}
+              />
+
+              {/* A selected workflow subagent takes over the chat area with its own thread. */}
+              <WorkflowSubagentThread
+                environmentId={activeThread.environmentId}
+                activeThreadKey={activeThreadKey}
+                cwd={gitCwd}
+                bottomInset={composerOverlayHeight}
               />
 
               {/* scroll to end pill — shown when user has scrolled away from the live edge */}
@@ -6421,9 +6477,11 @@ function ChatViewContent(props: ChatViewProps) {
           onAddDiff={addDiffSurface}
           onAddFiles={addFilesSurface}
           onAddAgents={addAgentsSurface}
+          onAddWorkflows={addWorkflowsSurface}
           browserAvailable={isPreviewSupportedInRuntime()}
           diffAvailable={isServerThread && isGitRepo}
           filesAvailable={activeProject !== null}
+          workflowsAvailable={workflowInspectorModel.hasActivity}
           liveAgentCount={agentPanelModel.liveCount}
         >
           {rightPanelContent}
@@ -6450,9 +6508,11 @@ function ChatViewContent(props: ChatViewProps) {
             onAddDiff={addDiffSurface}
             onAddFiles={addFilesSurface}
             onAddAgents={addAgentsSurface}
+            onAddWorkflows={addWorkflowsSurface}
             browserAvailable={isPreviewSupportedInRuntime()}
             diffAvailable={isServerThread && isGitRepo}
             filesAvailable={activeProject !== null}
+            workflowsAvailable={workflowInspectorModel.hasActivity}
             liveAgentCount={agentPanelModel.liveCount}
           >
             {rightPanelContent}

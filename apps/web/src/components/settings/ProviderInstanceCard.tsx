@@ -17,6 +17,7 @@ import {
   isProviderDriverKind,
   type ProviderInstanceConfig,
   type ProviderInstanceEnvironmentVariable,
+  type ProviderModelOptionDefaults,
   type ProviderInstanceId,
   type ProviderDriverKind,
   type ServerProvider,
@@ -491,6 +492,17 @@ export function ProviderInstanceCard({
     onUpdate({ ...rest, config: nextConfig } as ProviderInstanceConfig);
   };
 
+  // Per-model option defaults live on the envelope, not inside the opaque
+  // driver config blob, so unknown-driver instances round-trip them too.
+  const updateModelOptionDefaults = (next: ProviderModelOptionDefaults) => {
+    const { modelOptionDefaults: _omit, ...rest } = instance;
+    onUpdate(
+      Object.keys(next).length > 0
+        ? ({ ...rest, modelOptionDefaults: next } as ProviderInstanceConfig)
+        : (rest as ProviderInstanceConfig),
+    );
+  };
+
   const updateEnvironment = (environment: ReadonlyArray<ProviderInstanceEnvironmentVariable>) => {
     const cleaned = environment.filter((variable) => variable.name.trim().length > 0);
     const { environment: _omit, ...rest } = instance;
@@ -783,6 +795,8 @@ export function ProviderInstanceCard({
                 hiddenModels={hiddenModels}
                 favoriteModels={favoriteModels}
                 modelOrder={modelOrder}
+                modelOptionDefaults={instance.modelOptionDefaults}
+                onModelOptionDefaultsChange={updateModelOptionDefaults}
                 onChange={updateCustomModels}
                 onHiddenModelsChange={onHiddenModelsChange}
                 onFavoriteModelsChange={onFavoriteModelsChange}

@@ -36,6 +36,7 @@
 import * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import { TrimmedNonEmptyString } from "./baseSchemas.ts";
+import { ProviderOptionSelections } from "./providerOptionSelection.ts";
 
 const PROVIDER_SLUG_MAX_CHARS = 64;
 /**
@@ -113,6 +114,18 @@ export const ProviderInstanceEnvironment = Schema.Array(ProviderInstanceEnvironm
 export type ProviderInstanceEnvironment = typeof ProviderInstanceEnvironment.Type;
 
 /**
+ * Per-model default provider option selections for one instance, keyed by the
+ * exact model slug the user configured them for. Applied only when a model
+ * selection carries no explicit options (see
+ * `applyProviderModelOptionDefaults` in `@t3tools/shared/model`).
+ */
+export const ProviderModelOptionDefaults = Schema.Record(
+  TrimmedNonEmptyString,
+  ProviderOptionSelections,
+);
+export type ProviderModelOptionDefaults = typeof ProviderModelOptionDefaults.Type;
+
+/**
  * Envelope shape for a provider instance configuration in `ServerSettings`.
  *
  * `driver` is intentionally accepted as any well-formed slug (see module
@@ -128,6 +141,7 @@ export const ProviderInstanceConfig = Schema.Struct({
   environment: Schema.optionalKey(ProviderInstanceEnvironment),
   enabled: Schema.optionalKey(Schema.Boolean),
   config: Schema.optionalKey(Schema.Unknown),
+  modelOptionDefaults: Schema.optionalKey(ProviderModelOptionDefaults),
 });
 export type ProviderInstanceConfig = typeof ProviderInstanceConfig.Type;
 

@@ -1,0 +1,66 @@
+name: Sync upstream release
+
+on:
+  schedule:
+    - cron: "17 */3 * * *"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Published upstream release tag. Leave blank for the newest nightly."
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-upstream-release-main
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Select upstream release
+        id: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_TAG: ${{ inputs.tag || '' }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$REQUESTED_TAG" ]]; then
+            tag="$(gh api "repos/pingdotgg/t3code/releases/tags/$REQUESTED_TAG" --jq 'select(.draft == false) | .tag_name')"
+          else
+            tag="$(gh api --paginate 'repos/pingdotgg/t3code/releases?per_page=100' \
+              --jq '[.[] | select(.draft == false and .prerelease == true and (.tag_name | test("^v[0-9]+\\.[0-9]+\\.[0-9]+-nightly\\.")))] | first | .tag_name')"
+          fi
+          test -n "$tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Merge selected release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/pingdotgg/t3code.git
+          git fetch --no-tags origin main
+          git reset --hard origin/main
+          git fetch --no-tags upstream "refs/tags/$RELEASE_TAG:refs/remotes/upstream-sync/selected"
+          target="$(git rev-parse 'refs/remotes/upstream-sync/selected^{commit}')"
+
+          if git merge-base --is-ancestor "$target" HEAD; then
+            echo "Upstream release $RELEASE_TAG is already merged."
+            exit 0
+          fi
+
+          # A conflict exits here. Nothing is pushed until the merge is complete and clean.
+          git merge --no-ff --no-edit "$target"
+          test -z "$(git status --porcelain)"
+          git push origin HEAD:main

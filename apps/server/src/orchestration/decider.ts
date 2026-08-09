@@ -400,6 +400,77 @@ export const decideOrchestrationCommand = Effect.fn("decideOrchestrationCommand"
       };
     }
 
+    // Retention delete. Every guard below re-reads the authoritative thread:
+    // the scan that produced this command saw a projection row that may be
+    // stale by the time the command reaches the decider, so a thread that
+    // woke, re-settled, pinned, snoozed, archived, or picked up work in that
+    // window must survive. Failing (rather than emitting nothing) keeps the
+    // engine's "no zero-event commands" rule intact; the retention worker
+    // treats the failure as a skip.
+    case "thread.auto-delete-settled": {
+      const thread = yield* requireThread({
+        readModel,
+        command,
+        threadId: command.threadId,
+      });
+      const skip = (detail: string) =>
+        Effect.fail(
+          new OrchestrationCommandInvariantError({
+            commandType: command.type,
+            detail: `thread ${command.threadId} ${detail}`,
+          }),
+        );
+      if (thread.deletedAt !== null) {
+        return yield* skip("is already deleted");
+      }
+      if (thread.settledOverride !== "settled" || thread.settledAt === null) {
+        return yield* skip("is not settled and cannot be auto-deleted");
+      }
+      // Exact match, not "older than": any re-settle mints a new settledAt, so
+      // an inequality would let a freshly re-settled thread inherit the old
+      // scan's verdict.
+      if (thread.settledAt !== command.settledAt) {
+        return yield* skip("was re-settled after the retention scan");
+      }
+      if (Date.parse(thread.settledAt) > Date.parse(command.cutoff)) {
+        return yield* skip("settled after the retention cutoff");
+      }
+      if (thread.pinnedAt !== null) {
+        return yield* skip("is pinned and cannot be auto-deleted");
+      }
+      if (thread.snoozedUntil !== null) {
+        return yield* skip("is snoozed and cannot be auto-deleted");
+      }
+      if (thread.archivedAt !== null) {
+        return yield* skip("is archived and cannot be auto-deleted");
+      }
+      if (thread.session?.status === "starting" || thread.session?.status === "running") {
+        return yield* skip("has an active session and cannot be auto-deleted");
+      }
+      if (hasOpenBlockingRequest(thread)) {
+        return yield* skip(
+          "has a pending approval or user-input request and cannot be auto-deleted",
+        );
+      }
+      const occurredAt = yield* nowIso;
+      if (threadHasQueuedTurnStart(thread, occurredAt)) {
+        return yield* skip("has a queued turn start and cannot be auto-deleted");
+      }
+      return {
+        ...(yield* withEventBase({
+          aggregateKind: "thread",
+          aggregateId: command.threadId,
+          occurredAt,
+          commandId: command.commandId,
+        })),
+        type: "thread.deleted",
+        payload: {
+          threadId: command.threadId,
+          deletedAt: occurredAt,
+        },
+      };
+    }
+
     case "thread.archive": {
       yield* requireThreadNotArchived({
         readModel,

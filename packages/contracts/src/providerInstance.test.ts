@@ -86,6 +86,25 @@ describe("ProviderInstanceRef", () => {
 });
 
 describe("ProviderInstanceConfig", () => {
+  it("decodes per-model option defaults, including the legacy object shape", () => {
+    const decoded = decodeProviderInstanceConfig({
+      driver: "codex",
+      modelOptionDefaults: {
+        "gpt-5.4": [{ id: "reasoningEffort", value: "xhigh" }],
+        "gpt-5.6-sol": { effort: "low" },
+      },
+    });
+
+    expect(decoded.modelOptionDefaults?.["gpt-5.4"]).toEqual([
+      { id: "reasoningEffort", value: "xhigh" },
+    ]);
+    expect(decoded.modelOptionDefaults?.["gpt-5.6-sol"]).toEqual([{ id: "effort", value: "low" }]);
+  });
+
+  it("keeps the field absent when no defaults are configured", () => {
+    expect(decodeProviderInstanceConfig({ driver: "codex" }).modelOptionDefaults).toBeUndefined();
+  });
+
   it("accepts a minimal config envelope for a driver", () => {
     const decoded = decodeProviderInstanceConfig({ driver: "codex" });
     expect(decoded.driver).toBe("codex");

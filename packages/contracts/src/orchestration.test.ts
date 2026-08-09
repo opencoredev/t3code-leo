@@ -6,6 +6,7 @@ import {
   DEFAULT_PROVIDER_INTERACTION_MODE,
   DEFAULT_RUNTIME_MODE,
   ModelSelection,
+  ClientOrchestrationCommand,
   OrchestrationCommand,
   OrchestrationEvent,
   OrchestrationGetFullThreadDiffInput,
@@ -911,5 +912,48 @@ it.effect("ModelSelection rejects malformed instance ids", () =>
       }),
     );
     assert.strictEqual(result._tag, "Failure");
+  }),
+);
+
+it.effect("decodes thread.auto-delete-settled as a server-only command", () =>
+  Effect.gen(function* () {
+    const command = yield* decodeOrchestrationCommand({
+      type: "thread.auto-delete-settled",
+      commandId: "server:retention:1",
+      threadId: "thread-1",
+      settledAt: "2026-01-01T00:00:00.000Z",
+      cutoff: "2026-01-15T00:00:00.000Z",
+    });
+    assert.strictEqual(command.type, "thread.auto-delete-settled");
+
+    // Clients must never be able to forge a retention delete: the command is
+    // absent from the client-dispatchable union.
+    const fromClient = yield* Effect.exit(
+      Schema.decodeUnknownEffect(ClientOrchestrationCommand)({
+        type: "thread.auto-delete-settled",
+        commandId: "client:retention:1",
+        threadId: "thread-1",
+        settledAt: "2026-01-01T00:00:00.000Z",
+        cutoff: "2026-01-15T00:00:00.000Z",
+      }),
+    );
+    assert.strictEqual(fromClient._tag, "Failure");
+  }),
+);
+
+it.effect("rejects thread.auto-delete-settled without its scan evidence", () =>
+  Effect.gen(function* () {
+    for (const missing of ["settledAt", "cutoff"] as const) {
+      const candidate: Record<string, unknown> = {
+        type: "thread.auto-delete-settled",
+        commandId: "server:retention:1",
+        threadId: "thread-1",
+        settledAt: "2026-01-01T00:00:00.000Z",
+        cutoff: "2026-01-15T00:00:00.000Z",
+      };
+      delete candidate[missing];
+      const result = yield* Effect.exit(decodeOrchestrationCommand(candidate));
+      assert.strictEqual(result._tag, "Failure");
+    }
   }),
 );

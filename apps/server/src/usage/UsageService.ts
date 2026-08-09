@@ -217,10 +217,20 @@ export const make = Effect.gen(function* () {
     const claudeHome = yield* resolveClaudeHomePath(settings.providers.claudeAgent);
     const claudeDir = yield* resolveClaudeTranscriptDir(claudeHome);
     const codexLayout = yield* resolveCodexHomeLayout(settings.providers.codex);
+    const configuredPiAgentDir = process.env["PI_CODING_AGENT_DIR"]?.trim();
+    const piAgentDir =
+      configuredPiAgentDir && configuredPiAgentDir.length > 0
+        ? configuredPiAgentDir === "~"
+          ? NodeOS.homedir()
+          : configuredPiAgentDir.startsWith("~/")
+            ? path.join(NodeOS.homedir(), configuredPiAgentDir.slice(2))
+            : configuredPiAgentDir
+        : path.join(NodeOS.homedir(), ".pi", "agent");
 
     return [
       { provider: "claude" as const, dir: claudeDir },
       { provider: "codex" as const, dir: path.join(codexLayout.sharedHomePath, "sessions") },
+      { provider: "pi" as const, dir: path.join(piAgentDir, "sessions") },
     ];
   });
 
