@@ -133,6 +133,10 @@ function SubagentThreadContent({
   const loading = result.waiting && transcript === null;
   const entries = transcript?.found ? transcript.entries : [];
   const prompt = transcript?.fullPrompt ?? focus.prompt;
+  const running = focus.status === "running" || focus.status === "pending";
+  // A live agent has no outcome yet: the workflow's shared result belongs to
+  // the run, not to this agent, and showing it here would be a lie.
+  const sharedResult = running ? null : (focus.result ?? transcript?.workflowResult);
 
   return (
     <div className="absolute inset-0 z-10 flex flex-col bg-background">
@@ -195,22 +199,25 @@ function SubagentThreadContent({
                 );
               })}
             </>
-          ) : transcript?.workflowResult ? (
+          ) : sharedResult ? (
             <div className="flex flex-col gap-2">
-              <ChatMarkdown
-                text={transcript.workflowResult}
-                cwd={cwd ?? undefined}
-                className="text-sm"
-              />
+              <ChatMarkdown text={sharedResult} cwd={cwd ?? undefined} className="text-sm" />
               <p className="text-xs text-muted-foreground">
-                Pi did not keep this agent's own journal, so this is the workflow's shared result.
+                {focus.result
+                  ? "Pi kept no full journal for this agent, so this is its reported result."
+                  : "Pi kept no journal for this agent, so this is the workflow's shared result."}
               </p>
             </div>
           ) : (
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              {focus.status === "running"
-                ? "The agent is still working — its transcript will appear here."
-                : "No journal found for this agent on the server."}
+            <p className="flex items-center justify-center gap-2 py-6 text-center text-sm text-muted-foreground">
+              {running ? (
+                <>
+                  <span aria-hidden className="size-1.5 animate-pulse rounded-full bg-info" />
+                  Working… this agent's transcript appears once Pi writes its journal.
+                </>
+              ) : (
+                "Pi did not keep a journal for this agent."
+              )}
             </p>
           )}
 

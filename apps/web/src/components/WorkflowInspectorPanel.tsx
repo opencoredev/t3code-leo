@@ -231,6 +231,8 @@ export function WorkflowInspectorPanel({
       error: agent.error,
       startedAt: workflow.startedAt,
       scriptPrefix: workflow.script?.slice(0, 200) ?? null,
+      // The Pi workflow id is the tool call id the parent journal recorded.
+      toolCallId: workflow.id,
     });
   };
 

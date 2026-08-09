@@ -84,6 +84,218 @@ function toolCallId(payload: Record<string, unknown>): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+/**
+ * Pi's workflow tool carries a structured snapshot alongside the rendered
+ * tree. The tree is clipped for display — it drops agents and truncates phase
+ * titles — so the structured payload is the source of truth and the tree is
+ * only a fallback for payloads that predate it.
+ */
+interface PiWorkflowSnapshot {
+  readonly name: string;
+  readonly description: string | null;
+  readonly phases: ReadonlyArray<string>;
+  readonly currentPhase: string | null;
+  readonly agents: ReadonlyArray<{
+    readonly id: number;
+    readonly label: string;
+    readonly phase: string | null;
+    readonly prompt: string | null;
+    readonly status: string;
+    readonly resultPreview: string | null;
+  }>;
+  readonly doneCount: number;
+  readonly runningCount: number;
+  readonly errorCount: number;
+  readonly result: string | null;
+  readonly durationMs: number | null;
+}
+
+const asString = (value: unknown): string | null =>
+  typeof value === "string" && value.trim().length > 0 ? value : null;
+
+const asCount = (value: unknown): number =>
+  typeof value === "number" && Number.isFinite(value) ? value : 0;
+
+function readWorkflowSnapshot(payload: Record<string, unknown>): PiWorkflowSnapshot | null {
+  const data = payload["data"];
+  if (typeof data !== "object" || data === null) return null;
+  const raw = (data as Record<string, unknown>)["rawOutput"];
+  if (typeof raw !== "object" || raw === null) return null;
+  const record = raw as Record<string, unknown>;
+  const name = asString(record["name"]);
+  if (name === null || !Array.isArray(record["agents"])) return null;
+
+  const agents = record["agents"].flatMap((entry) => {
+    if (typeof entry !== "object" || entry === null) return [];
+    const agent = entry as Record<string, unknown>;
+    const label = asString(agent["label"]);
+    if (label === null) return [];
+    return [
+      {
+        id: asCount(agent["id"]),
+        label,
+        phase: asString(agent["phase"]),
+        prompt: asString(agent["prompt"]),
+        status: asString(agent["status"]) ?? "pending",
+        resultPreview: asString(agent["resultPreview"]),
+      },
+    ];
+  });
+
+  const rawResult = record["result"];
+  return {
+    name,
+    description: asString(record["description"]),
+    phases: Array.isArray(record["phases"])
+      ? record["phases"].flatMap((phase) => (asString(phase) === null ? [] : [phase as string]))
+      : [],
+    currentPhase: asString(record["currentPhase"]),
+    agents,
+    doneCount: asCount(record["doneCount"]),
+    runningCount: asCount(record["runningCount"]),
+    errorCount: asCount(record["errorCount"]),
+    result:
+      rawResult === undefined || rawResult === null
+        ? null
+        : typeof rawResult === "string"
+          ? rawResult
+          : JSON.stringify(rawResult, null, 2),
+    durationMs: typeof record["durationMs"] === "number" ? record["durationMs"] : null,
+  };
+}
+
+function snapshotStatus(status: string): RuntimeSubagentStatus {
+  switch (status) {
+    case "done":
+    case "completed":
+      return "completed";
+    case "running":
+    case "active":
+      return "running";
+    case "error":
+    case "failed":
+      return "failed";
+    case "cancelled":
+    case "aborted":
+      return "cancelled";
+    default:
+      return "pending";
+  }
+}
+
+function formatDuration(durationMs: number | null): string | null {
+  if (durationMs === null || durationMs < 0) return null;
+  const seconds = Math.floor(durationMs / 1000);
+  return seconds < 60
+    ? `${seconds}s`
+    : `${Math.floor(seconds / 60)}m ${String(seconds % 60).padStart(2, "0")}s`;
+}
+
+/** Builds the model from Pi's structured snapshot: every agent, full titles. */
+function workflowFromSnapshot(input: {
+  id: string;
+  snapshot: PiWorkflowSnapshot;
+  startedAt: string;
+  completedAt: string | null;
+  finalResult: string | null;
+}): WorkflowInspectorWorkflow {
+  const { snapshot } = input;
+  const workflowStatus: RuntimeSubagentStatus =
+    input.completedAt !== null ? (snapshot.errorCount > 0 ? "failed" : "completed") : "running";
+
+  // Phase order comes from the declared list; an agent whose phase never made
+  // that list still needs a home, so its phase is appended in first-seen order.
+  const phaseOrder: string[] = [...snapshot.phases];
+  for (const agent of snapshot.agents) {
+    if (agent.phase !== null && !phaseOrder.includes(agent.phase)) phaseOrder.push(agent.phase);
+  }
+
+  const phases: WorkflowInspectorPhase[] = phaseOrder.map((title, index) => {
+    const agents = snapshot.agents
+      .filter((agent) => agent.phase === title)
+      .map((agent) => {
+        const status = snapshotStatus(agent.status);
+        return {
+          id: `${input.id}:${agent.id}`,
+          title: agent.label,
+          role: agent.phase,
+          modelLabel: null,
+          status,
+          statusLabel: statusLabel(status),
+          needsAttention: status === "failed" || status === "waiting",
+          task: agent.prompt ?? agent.label,
+          result: agent.resultPreview,
+          error: status === "failed" ? (agent.resultPreview ?? "Agent failed") : null,
+          elapsedLabel: null,
+          tokensLabel: null,
+          toolCount: 0,
+          transcript: [],
+          transcriptTruncated: false,
+        } satisfies WorkflowInspectorAgent;
+      });
+    const settled = agents.filter((agent) =>
+      ["completed", "failed", "cancelled", "interrupted"].includes(agent.status),
+    ).length;
+    const state: WorkflowInspectorPhase["state"] = agents.some(
+      (agent) => agent.status === "running",
+    )
+      ? "running"
+      : agents.length > 0 && settled === agents.length
+        ? "done"
+        : title === snapshot.currentPhase
+          ? "running"
+          : "pending";
+    return {
+      index,
+      title,
+      state,
+      parallel: agents.length > 1,
+      needsAttention: agents.some((agent) => agent.needsAttention),
+      agents,
+    };
+  });
+
+  const agents = phases.flatMap((phase) => phase.agents);
+  const result = snapshot.result ?? input.finalResult;
+  const elapsed =
+    formatDuration(snapshot.durationMs) ?? elapsedLabel(input.startedAt, input.completedAt);
+  const coordinator: WorkflowInspectorAgent = {
+    id: input.id,
+    title: snapshot.name,
+    role: snapshot.description,
+    modelLabel: null,
+    status: workflowStatus,
+    statusLabel: statusLabel(workflowStatus),
+    needsAttention: workflowStatus === "failed",
+    task: snapshot.description ?? snapshot.name,
+    result,
+    error: workflowStatus === "failed" ? result : null,
+    elapsedLabel: elapsed,
+    tokensLabel: null,
+    toolCount: 0,
+    transcript: [],
+    transcriptTruncated: false,
+  };
+
+  return {
+    id: input.id,
+    name: snapshot.name,
+    startedAt: input.startedAt,
+    script: null,
+    status: workflowStatus,
+    statusLabel: statusLabel(workflowStatus),
+    needsAttention: coordinator.needsAttention || agents.some((agent) => agent.needsAttention),
+    elapsedLabel: elapsed,
+    phases,
+    looseAgents: [],
+    coordinator,
+    agentCount: agents.length,
+    settledCount: agents.filter((agent) =>
+      ["completed", "failed", "cancelled", "interrupted"].includes(agent.status),
+    ).length,
+  };
+}
+
 function workflowScriptOf(payload: Record<string, unknown>): string | null {
   const data = payload["data"];
   if (typeof data !== "object" || data === null) return null;
@@ -356,6 +568,7 @@ export function derivePiWorkflowInspectorModel(
       details: string[];
       finalResult: string | null;
       script: string | null;
+      snapshot: PiWorkflowSnapshot | null;
     }
   >();
   for (const activity of activities) {
@@ -372,9 +585,12 @@ export function derivePiWorkflowInspectorModel(
       details: [],
       finalResult: null,
       script: null,
+      snapshot: null,
     };
     next.updatedAt = activity.createdAt;
     if (next.script === null) next.script = workflowScriptOf(payload);
+    // Latest snapshot wins: it carries the current status of every agent.
+    next.snapshot = readWorkflowSnapshot(payload) ?? next.snapshot;
     if (detail.includes("◆ Workflow:")) next.details.push(detail);
     if (activity.kind === "tool.completed") next.finalResult = extractFinalResult(detail);
     groups.set(id, next);
@@ -382,10 +598,24 @@ export function derivePiWorkflowInspectorModel(
   if (groups.size === 0) return null;
 
   const workflows = [...groups.entries()].toReversed().flatMap(([id, group]) => {
-    if (group.details.length === 0) return [];
+    if (group.details.length === 0 && group.snapshot === null) return [];
     const completed =
       group.finalResult !== null ||
       (group.details.at(-1)?.startsWith("Workflow completed") ?? false);
+    if (group.snapshot !== null) {
+      return [
+        {
+          ...workflowFromSnapshot({
+            id,
+            snapshot: group.snapshot,
+            startedAt: group.startedAt,
+            completedAt: completed ? group.updatedAt : null,
+            finalResult: group.finalResult,
+          }),
+          script: group.script,
+        },
+      ];
+    }
     const parsed = parseWorkflowSnapshot({
       id,
       details: group.details,

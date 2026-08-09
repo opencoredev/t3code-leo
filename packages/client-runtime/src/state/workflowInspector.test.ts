@@ -258,6 +258,82 @@ describe("deriveWorkflowInspectorModel", () => {
   });
 });
 
+describe("Pi structured workflow snapshots", () => {
+  it("renders every agent and full phase titles from the structured payload", () => {
+    // The rendered tree clips agents and truncates titles; the structured
+    // payload is authoritative, so a clipped tree must not win.
+    const model = deriveWorkflowInspectorModel({
+      driver: PI_DRIVER_KIND,
+      activities: [
+        activity("tool.updated", {
+          detail:
+            "Workflow running\n◆ Workflow: audit (1/4 done, 3 running)\n  ▶ Reference and cur... 1/4\n    #1 ● api\n    #2 ✓ site...",
+          data: {
+            toolCallId: "call-1",
+            rawOutput: {
+              name: "audit",
+              description: "Parallel audit",
+              phases: ["Reference and current-state audit"],
+              currentPhase: "Reference and current-state audit",
+              agentCount: 4,
+              doneCount: 1,
+              runningCount: 3,
+              errorCount: 0,
+              agents: [
+                {
+                  id: 1,
+                  label: "email-sdk api",
+                  phase: "Reference and current-state audit",
+                  prompt: "Read the repository at /repo",
+                  status: "running",
+                },
+                {
+                  id: 2,
+                  label: "email-sdk site",
+                  phase: "Reference and current-state audit",
+                  prompt: "Read the docs site",
+                  status: "done",
+                  resultPreview: "Docs live in apps/docs",
+                },
+                {
+                  id: 3,
+                  label: "sandbox-sdk api",
+                  phase: "Reference and current-state audit",
+                  prompt: "Read the SDK package",
+                  status: "running",
+                },
+                {
+                  id: 4,
+                  label: "sandbox-sdk site",
+                  phase: "Reference and current-state audit",
+                  prompt: "Read the marketing surface",
+                  status: "running",
+                },
+              ],
+            },
+          },
+        }),
+      ],
+    });
+
+    const workflow = model.workflows[0];
+    expect(workflow?.status).toBe("running");
+    expect(workflow?.agentCount).toBe(4);
+    expect(workflow?.settledCount).toBe(1);
+    expect(workflow?.phases[0]?.title).toBe("Reference and current-state audit");
+    expect(workflow?.phases[0]?.agents.map((agent) => agent.title)).toEqual([
+      "email-sdk api",
+      "email-sdk site",
+      "sandbox-sdk api",
+      "sandbox-sdk site",
+    ]);
+    // Each agent carries its own full prompt and its own reported result.
+    expect(workflow?.phases[0]?.agents[0]?.task).toBe("Read the repository at /repo");
+    expect(workflow?.phases[0]?.agents[1]?.result).toBe("Docs live in apps/docs");
+    expect(workflow?.phases[0]?.agents[1]?.statusLabel).toBe("Completed");
+  });
+});
+
 describe("Pi workflow progress snapshots", () => {
   it("derives phases and selectable agents from persisted workflow tool updates", () => {
     const toolCallId = "workflow-call-1";

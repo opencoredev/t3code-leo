@@ -197,7 +197,7 @@ interface ParentScan {
  */
 async function scanParentJournal(
   filePath: string,
-  matchesScript: (script: string) => boolean,
+  matches: (input: { script: string; toolCallId: string | null }) => boolean,
 ): Promise<ParentScan | null> {
   let script: string | null = null;
   let awaitingResult = false;
@@ -242,7 +242,8 @@ async function scanParentJournal(
         if (typeof argumentsValue !== "object" || argumentsValue === null) continue;
         const candidate = (argumentsValue as Record<string, unknown>)["script"];
         if (typeof candidate !== "string") continue;
-        if (!matchesScript(candidate)) continue;
+        const callId = typeof block["id"] === "string" ? block["id"] : null;
+        if (!matches({ script: candidate, toolCallId: callId })) continue;
         script = candidate;
         awaitingResult = true;
       }
@@ -307,14 +308,24 @@ export async function readPiSubagentTranscript(
   // Clients often hold no copy of the script at all, so the label inside the
   // script is the fallback locator: `label: 'discover projects'`.
   const label = (input.agentLabel ?? "").replace(/\.\.\.$|…$/, "").trim();
-  const matchesScript = (script: string): boolean => {
+  // The tool call id identifies exactly one run. Without it a label match can
+  // land on a different workflow and report that run's result as this one's.
+  const wantedCallId = input.toolCallId?.split("|")[0]?.trim() ?? "";
+  const matches = ({
+    script,
+    toolCallId,
+  }: {
+    script: string;
+    toolCallId: string | null;
+  }): boolean => {
+    if (wantedCallId.length > 0) return toolCallId === wantedCallId;
     if (scriptPrefix.length > 0 && normalize(script).startsWith(scriptPrefix)) return true;
     return label.length >= 3 && script.includes(label);
   };
-  if (scriptPrefix.length > 0 || label.length >= 3) {
+  if (wantedCallId.length > 0 || scriptPrefix.length > 0 || label.length >= 3) {
     parents.sort((a, b) => b.mtimeMs - a.mtimeMs);
     for (const parent of parents) {
-      const scan = await scanParentJournal(parent.path, matchesScript);
+      const scan = await scanParentJournal(parent.path, matches);
       if (scan === null) continue;
       workflowResult = scan.result;
       if (input.agentLabel) fullPrompt = promptFromScript(scan.script, input.agentLabel);

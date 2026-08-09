@@ -25,6 +25,12 @@ export const PiSubagentTranscriptInput = Schema.Struct({
   scriptPrefix: Schema.optionalKey(Schema.String),
   /** The agent's label in the workflow script, for full-prompt recovery. */
   agentLabel: Schema.optionalKey(Schema.String),
+  /**
+   * The workflow tool call's id. This is the only exact anchor: a label can
+   * repeat across runs, so matching on it alone can answer with a different
+   * workflow's result.
+   */
+  toolCallId: Schema.optionalKey(Schema.String),
 });
 export type PiSubagentTranscriptInput = typeof PiSubagentTranscriptInput.Type;
 

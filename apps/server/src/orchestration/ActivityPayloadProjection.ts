@@ -231,10 +231,82 @@ function projectMcpToolCallData(data: Record<string, unknown>): Record<string, u
   return projectedData;
 }
 
+/**
+ * Pi's workflow tool reports a structured run snapshot. Clients render the
+ * whole run from it, so it must survive projection — the rendered tree in
+ * `detail` is clipped for display and drops agents entirely.
+ *
+ * Bounded on every axis so a long run cannot grow the websocket payload:
+ * agents are capped, and each free-text field is truncated.
+ */
+const WORKFLOW_MAX_AGENTS = 60;
+const WORKFLOW_MAX_PROMPT = 4_000;
+const WORKFLOW_MAX_RESULT_PREVIEW = 2_000;
+const WORKFLOW_MAX_RESULT = 16_000;
+
+function boundedText(value: unknown, limit: number): string | undefined {
+  const text = asTrimmedString(value);
+  if (!text) return undefined;
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}\u2026`;
+}
+
+function projectWorkflowSnapshot(rawOutput: Record<string, unknown>) {
+  if (typeof rawOutput.name !== "string" || !Array.isArray(rawOutput.agents)) {
+    return undefined;
+  }
+
+  const agents = rawOutput.agents.slice(0, WORKFLOW_MAX_AGENTS).flatMap((entry) => {
+    const agent = asRecord(entry);
+    if (!agent) return [];
+    const label = asTrimmedString(agent.label);
+    if (!label) return [];
+    const prompt = boundedText(agent.prompt, WORKFLOW_MAX_PROMPT);
+    const resultPreview = boundedText(agent.resultPreview, WORKFLOW_MAX_RESULT_PREVIEW);
+    return [
+      {
+        ...(typeof agent.id === "number" ? { id: agent.id } : {}),
+        label,
+        ...(asTrimmedString(agent.phase) ? { phase: agent.phase } : {}),
+        ...(asTrimmedString(agent.status) ? { status: agent.status } : {}),
+        ...(prompt ? { prompt } : {}),
+        ...(resultPreview ? { resultPreview } : {}),
+      },
+    ];
+  });
+
+  const result =
+    typeof rawOutput.result === "string"
+      ? boundedText(rawOutput.result, WORKFLOW_MAX_RESULT)
+      : rawOutput.result === undefined || rawOutput.result === null
+        ? undefined
+        : boundedText(JSON.stringify(rawOutput.result, null, 2), WORKFLOW_MAX_RESULT);
+
+  return {
+    name: rawOutput.name,
+    ...(asTrimmedString(rawOutput.description) ? { description: rawOutput.description } : {}),
+    ...(Array.isArray(rawOutput.phases)
+      ? { phases: rawOutput.phases.filter((phase) => typeof phase === "string") }
+      : {}),
+    ...(asTrimmedString(rawOutput.currentPhase) ? { currentPhase: rawOutput.currentPhase } : {}),
+    agents,
+    ...(typeof rawOutput.agentCount === "number" ? { agentCount: rawOutput.agentCount } : {}),
+    ...(typeof rawOutput.doneCount === "number" ? { doneCount: rawOutput.doneCount } : {}),
+    ...(typeof rawOutput.runningCount === "number" ? { runningCount: rawOutput.runningCount } : {}),
+    ...(typeof rawOutput.errorCount === "number" ? { errorCount: rawOutput.errorCount } : {}),
+    ...(typeof rawOutput.durationMs === "number" ? { durationMs: rawOutput.durationMs } : {}),
+    ...(result ? { result } : {}),
+  };
+}
+
 function projectRawOutput(value: unknown): Record<string, unknown> | undefined {
   const rawOutput = asRecord(value);
   if (!rawOutput) {
     return undefined;
+  }
+
+  const workflow = projectWorkflowSnapshot(rawOutput);
+  if (workflow) {
+    return workflow;
   }
 
   if (typeof rawOutput.totalFiles === "number" && Number.isFinite(rawOutput.totalFiles)) {

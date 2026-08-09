@@ -115,3 +115,77 @@ describe("projectActivityPayload agent-field survival", () => {
     expect(projected.payload).toEqual(source.payload);
   });
 });
+
+/**
+ * The Pi workflow tool reports the whole run as structured data. Clients build
+ * the workflow inspector from it, and the rendered `detail` tree is clipped, so
+ * dropping this snapshot leaves the UI with a partial run.
+ */
+describe("projectActivityPayload workflow snapshot", () => {
+  it("keeps every agent, prompt, and count for the client", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "dynamic_tool_call",
+        detail:
+          "Workflow running\n◆ Workflow: audit (1/4 done, 3 running)\n  ▶ Reference and cur...",
+        data: {
+          toolCallId: "call-1",
+          rawOutput: {
+            name: "audit",
+            description: "Parallel audit",
+            phases: ["Reference and current-state audit"],
+            currentPhase: "Reference and current-state audit",
+            agentCount: 4,
+            doneCount: 1,
+            runningCount: 3,
+            errorCount: 0,
+            agents: [
+              { id: 1, label: "api", phase: "Audit", prompt: "Read the repo", status: "running" },
+              {
+                id: 2,
+                label: "site",
+                phase: "Audit",
+                prompt: "Read the docs",
+                status: "done",
+                resultPreview: "Docs live in apps/docs",
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const rawOutput = (projected.payload as { data: { rawOutput: Record<string, unknown> } }).data
+      .rawOutput;
+    expect(rawOutput.name).toBe("audit");
+    expect(rawOutput.currentPhase).toBe("Reference and current-state audit");
+    expect(rawOutput.doneCount).toBe(1);
+    expect(rawOutput.agents).toHaveLength(2);
+    expect((rawOutput.agents as ReadonlyArray<{ prompt: string }>)[0]?.prompt).toBe(
+      "Read the repo",
+    );
+    expect((rawOutput.agents as ReadonlyArray<{ resultPreview?: string }>)[1]?.resultPreview).toBe(
+      "Docs live in apps/docs",
+    );
+  });
+
+  it("bounds long prompts so one run cannot bloat the payload", () => {
+    const projected = projectActivityPayload(
+      activity({
+        itemType: "dynamic_tool_call",
+        data: {
+          rawOutput: {
+            name: "audit",
+            agents: [{ id: 1, label: "api", prompt: "x".repeat(9_000), status: "running" }],
+          },
+        },
+      }),
+    );
+
+    const agents = (
+      projected.payload as { data: { rawOutput: { agents: ReadonlyArray<{ prompt: string }> } } }
+    ).data.rawOutput.agents;
+    expect(agents[0]?.prompt.length).toBeLessThanOrEqual(4_000);
+    expect(agents[0]?.prompt.endsWith("…")).toBe(true);
+  });
+});

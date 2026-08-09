@@ -23,6 +23,8 @@ export interface WorkflowAgentFocus {
   readonly startedAt: string | null;
   /** Leading slice of the workflow script, for parent-journal recovery. */
   readonly scriptPrefix: string | null;
+  /** The workflow tool call's id: the exact anchor for the parent journal. */
+  readonly toolCallId: string | null;
 }
 
 interface WorkflowAgentFocusStore {
