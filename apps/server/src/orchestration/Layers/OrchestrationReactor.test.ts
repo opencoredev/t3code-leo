@@ -10,6 +10,7 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadRetentionReactor } from "../Services/ThreadRetentionReactor.ts";
+import { OrphanedSessionRecovery } from "../Services/OrphanedSessionRecovery.ts";
 import { OrchestrationReactor } from "../Services/OrchestrationReactor.ts";
 import { makeOrchestrationReactor } from "./OrchestrationReactor.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
@@ -66,6 +67,14 @@ describe("OrchestrationReactor", () => {
           }),
         ),
         Layer.provideMerge(
+          Layer.succeed(OrphanedSessionRecovery, {
+            recover: () => {
+              started.push("orphaned-session-recovery");
+              return Effect.void;
+            },
+          }),
+        ),
+        Layer.provideMerge(
           Layer.succeed(ThreadRetentionReactor, {
             start: () => {
               started.push("thread-retention-reactor");
@@ -97,6 +106,7 @@ describe("OrchestrationReactor", () => {
       "checkpoint-reactor",
       "thread-deletion-reactor",
       "thread-retention-reactor",
+      "orphaned-session-recovery",
       "agent-awareness-relay",
     ]);
 

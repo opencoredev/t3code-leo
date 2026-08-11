@@ -10,6 +10,7 @@ import { ProviderCommandReactor } from "../Services/ProviderCommandReactor.ts";
 import { ProviderRuntimeIngestionService } from "../Services/ProviderRuntimeIngestion.ts";
 import { ThreadDeletionReactor } from "../Services/ThreadDeletionReactor.ts";
 import { ThreadRetentionReactor } from "../Services/ThreadRetentionReactor.ts";
+import { OrphanedSessionRecovery } from "../Services/OrphanedSessionRecovery.ts";
 import * as AgentAwarenessRelay from "../../relay/AgentAwarenessRelay.ts";
 
 export const makeOrchestrationReactor = Effect.gen(function* () {
@@ -18,6 +19,7 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
   const checkpointReactor = yield* CheckpointReactor;
   const threadDeletionReactor = yield* ThreadDeletionReactor;
   const threadRetentionReactor = yield* ThreadRetentionReactor;
+  const orphanedSessionRecovery = yield* OrphanedSessionRecovery;
   const agentAwarenessRelay = yield* AgentAwarenessRelay.AgentAwarenessRelay;
 
   const start: OrchestrationReactorShape["start"] = Effect.fn("start")(function* () {
@@ -26,6 +28,9 @@ export const makeOrchestrationReactor = Effect.gen(function* () {
     yield* checkpointReactor.start();
     yield* threadDeletionReactor.start();
     yield* threadRetentionReactor.start();
+    // Before anything new runs: a session the previous process left live can
+    // never finish its turn, and the thread reads "Working" until it does.
+    yield* orphanedSessionRecovery.recover();
     yield* agentAwarenessRelay.start();
   });
 
