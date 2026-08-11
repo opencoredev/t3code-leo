@@ -1,8 +1,13 @@
 import type { UsageProviderKind } from "@t3tools/contracts";
 import { useMemo } from "react";
 
-import type { DailyTotals } from "../../usage/usageMerge";
-import { formatDayShort, formatTokens, formatUsd } from "../../usage/usageFormat";
+import type { DailyTotals, HourlyTotals } from "@t3tools/shared/usageMerge";
+import {
+  formatDayShort,
+  formatHourShort,
+  formatTokens,
+  formatUsd,
+} from "@t3tools/shared/usageFormat";
 import { Area } from "../dither-kit/area";
 import { AreaChart } from "../dither-kit/area-chart";
 import type { ChartConfig } from "../dither-kit/chart-context";
@@ -17,7 +22,13 @@ export type UsageChartMetric = "tokens" | "cost";
 interface UsageProviderChartProps {
   readonly days: readonly string[];
   readonly daily: readonly DailyTotals[];
+  readonly hours: readonly string[];
+  readonly hourly: readonly HourlyTotals[];
   readonly metric: UsageChartMetric;
+  readonly referenceTime?: string | undefined;
+  /** Day buckets over a long window, hour buckets over the last 24 hours. */
+  readonly resolution: string;
+  readonly timeZone: string;
 }
 
 /** One day's per-provider values, shared by the chart and focused tests. */
@@ -30,7 +41,7 @@ export interface DayColumn {
 }
 
 function valueFor(
-  daily: DailyTotals | undefined,
+  daily: DailyTotals | HourlyTotals | undefined,
   provider: UsageProviderKind,
   metric: UsageChartMetric,
 ): number {
@@ -54,7 +65,7 @@ export function niceScale(peak: number, count: number): { max: number; ticks: re
 
 export function buildDayColumns(
   days: readonly string[],
-  byDay: ReadonlyMap<string, DailyTotals>,
+  byDay: ReadonlyMap<string, DailyTotals | HourlyTotals>,
   metric: UsageChartMetric,
 ): readonly DayColumn[] {
   return days.map((day) => {
@@ -80,17 +91,33 @@ const DITHER_CONFIG: ChartConfig = {
   claude: { label: PROVIDER_LABEL.claude, color: "nightlyPurple" },
 };
 
-export function UsageProviderChart({ days, daily, metric }: UsageProviderChartProps) {
+export function UsageProviderChart({
+  days,
+  daily,
+  hours,
+  hourly,
+  metric,
+  resolution,
+  timeZone,
+}: UsageProviderChartProps) {
+  const hourly24 = resolution === "hour";
   const data = useMemo<UsageChartRow[]>(() => {
-    const byDay = new Map(daily.map((entry) => [entry.day, entry]));
-    return days.map((day) => ({
-      day,
-      pi: valueFor(byDay.get(day), "pi", metric),
-      codex: valueFor(byDay.get(day), "codex", metric),
-      claude: valueFor(byDay.get(day), "claude", metric),
+    const buckets: ReadonlyArray<string> = hourly24 ? hours : days;
+    const byKey = new Map<string, DailyTotals | HourlyTotals>(
+      hourly24
+        ? hourly.map((entry) => [entry.hourStart, entry] as const)
+        : daily.map((entry) => [entry.day, entry] as const),
+    );
+    return buckets.map((bucket) => ({
+      day: bucket,
+      pi: valueFor(byKey.get(bucket), "pi", metric),
+      codex: valueFor(byKey.get(bucket), "codex", metric),
+      claude: valueFor(byKey.get(bucket), "claude", metric),
     }));
-  }, [daily, days, metric]);
+  }, [daily, days, hourly, hourly24, hours, metric]);
   const format = metric === "tokens" ? formatTokens : formatUsd;
+  const formatBucket = (value: unknown) =>
+    hourly24 ? formatHourShort(String(value), timeZone) : formatDayShort(String(value));
 
   return (
     <div className="h-64 w-full" role="group" aria-label={`Daily ${metric} by provider`}>

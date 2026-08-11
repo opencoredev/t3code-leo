@@ -22,3 +22,9 @@ Automatic deletion is off by default. In **Settings → General**, you can enabl
 for threads that remain explicitly settled for a selected number of days. T3 Code skips pinned,
 snoozed, archived, or active threads. It also checks for running work and pending requests before it
 deletes a thread.
+## Environment artwork
+
+Dev and Nightly environments can identify themselves with artwork at the top of the sidebar and in
+the send button. Choose **Artwork**, **Version pill**, or **None** in Settings under environment
+identification. Artwork is recolored to match each built-in theme. Custom themes use the **Version
+pill** fallback because their colors are not controlled by T3 Code.
